@@ -1,0 +1,5 @@
+- insert:
+    - id: personal-chat
+      name: dsh-personal-chat
+      config:
+        dataDir: !!js dshHomePath('personal-chat')

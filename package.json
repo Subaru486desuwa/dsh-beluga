@@ -1,0 +1,25 @@
+{
+  "name": "dsh-personal-chat-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.28.5",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -b tsconfig.host.json tsconfig.client.json",
+    "test": "vitest run",
+    "pack": "pnpm --filter dsh-personal-chat pack --pack-destination ../../dist"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-typert-generator": "0.2.1-rc.3",
+    "typescript": "6.0.3",
+    "esbuild": "0.28.1",
+    "vitest": "4.1.11",
+    "jsdom": "29.1.1",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "22.20.1",
+    "@types/react": "18.3.1",
+    "@types/react-dom": "18.3.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}

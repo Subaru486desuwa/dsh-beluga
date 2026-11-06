@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "composite": true,
+    "declaration": true,
+    "rewriteRelativeImportExtensions": true,
+    "jsx": "react-jsx",
+    "noEmitOnError": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "dsh-personal-chat/types": [
+        "./packages/plugin/src/shared/types.ts"
+      ],
+      "dsh-personal-chat/models": [
+        "./packages/plugin/src/shared/models.ts"
+      ]
+    }
+  }
+}
