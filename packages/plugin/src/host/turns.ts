@@ -13,10 +13,12 @@ import type { Config } from './config.ts'
 import type { Conversations, RunningTurn } from './conversations.ts'
 import type { InlineImage, ModelBridge } from './model-bridge.ts'
 import type { PersonalMemory } from './personal-memory.ts'
-import type { ChatEntry, ConversationRecord } from './records.ts'
+import { isWebUrl, type ChatEntry, type ConversationRecord } from './records.ts'
 import type { ModelRef } from '../shared/models.ts'
-import type { ChatAttachment, ChatBranch, ConversationId, MemoryId } from '../shared/types.ts'
+import type { ChatAttachment, ChatBranch, ConversationId, MemoryId, WebSource } from '../shared/types.ts'
 
+/** Bounds the list of pages shown under one reply. */
+const MAX_SOURCES = 20
 function safeCode(code: string): string { return /^[A-Z0-9_-]{1,64}$/u.test(code) ? code : 'MODEL_ERROR' }
 
 /** Runs one response: model steps, tool calls, and the durable record of each. */
@@ -41,7 +43,7 @@ export class Turns {
     const entry: ChatEntry = { id: requestId, message, userText: content, attachmentIds, admissionModel: model, admissionWeb: web, originBranchId: branch.id, time: Date.now() }
     let settled!: () => void
     const done = new Promise<void>(resolve => { settled = resolve })
-    const running: RunningTurn = { id: randomUUID(), branchId: branch.id, userId: entry.id, model, web, controller: new AbortController(), text: '', reasoning: '', done, settled }
+    const running: RunningTurn = { id: randomUUID(), branchId: branch.id, userId: entry.id, model, web, controller: new AbortController(), sources: [], text: '', reasoning: '', done, settled }
     const current = record.conversation
     const updatedBranch = { ...branch, messageIds: [...branch.messageIds, entry.id] }
     const conversation = { ...current, title: current.title || Array.from(content || attachments[0]?.name || 'Chat').slice(0, 80).join(''), updatedAt: Date.now(), branches: current.branches.map(item => item.id === branch.id ? updatedBranch : item), selectedBranchId: branch.id }
@@ -104,7 +106,9 @@ export class Turns {
         const args = z.object({ query: z.string().trim().min(1).max(2000) }).strict().parse(raw)
         const web = this.ctx.get('web')
         if (!web) throw new PersonalChatError('web-unavailable', 'Configure a Harness web search provider')
-        return web.search({ query: args.query, maxResults: 5 }, signal)
+        const result = await web.search({ query: args.query, maxResults: 5 }, signal)
+        this.cite(turn, result.sources)
+        return result
       }
       case 'web_fetch': {
         if (!turn.web) throw new PersonalChatError('tool-forbidden', 'Web access is disabled for this request')
@@ -112,7 +116,9 @@ export class Turns {
         if (!['http:', 'https:'].includes(new URL(args.url).protocol)) throw new PersonalChatError('web-url', 'Only HTTP(S) URLs are allowed')
         const web = this.ctx.get('web')
         if (!web) throw new PersonalChatError('web-unavailable', 'Configure a Harness web fetch provider')
-        return web.fetch({ url: args.url }, signal)
+        const page = await web.fetch({ url: args.url }, signal)
+        this.cite(turn, [{ url: page.url }])
+        return page
       }
       case 'memory_propose': {
         this.memory.guard(id)
@@ -125,11 +131,23 @@ export class Turns {
         const query = normalized(args.query)
         return this.chats.domain.global.get().memories.filter(memory => memory.state === 'active' && (!query || normalized(memory.text).includes(query))).slice(0, 20)
       }
+      case 'search_chats': {
+        this.memory.guard(id)
+        if (!this.chats.domain.global.get().profile.referenceChats) throw new PersonalChatError('tool-forbidden', 'Searching earlier chats is turned off')
+        const args = z.object({ query: z.string().trim().min(2).max(200) }).strict().parse(raw)
+        return { excerpts: await this.chats.domain.excerpts(args.query, id) }
+      }
       default: throw new PersonalChatError('tool-forbidden', 'This tool is not available in Personal Chat')
     }
   }
-  private withMessage(record: ConversationRecord, turn: RunningTurn, message: Message, attachmentIds: readonly string[] = []): ConversationRecord {
-    const entry: ChatEntry = { id: message.id, message, time: Date.now(), attachmentIds }
+  /** Note pages for the list under the reply; only web addresses can become links there. */
+  private cite(turn: RunningTurn, sources: readonly WebSource[]): void {
+    for (const { url, title } of sources) {
+      if (isWebUrl(url) && turn.sources.length < MAX_SOURCES && !turn.sources.some(source => source.url === url)) turn.sources.push({ url, ...(title ? { title } : {}) })
+    }
+  }
+  private withMessage(record: ConversationRecord, turn: RunningTurn, message: Message, attachmentIds: readonly string[] = [], sources: readonly WebSource[] = []): ConversationRecord {
+    const entry: ChatEntry = { id: message.id, message, time: Date.now(), attachmentIds, ...(sources.length ? { sources } : {}) }
     const branches = record.conversation.branches.map(branch => branch.id === turn.branchId ? { ...branch, messageIds: [...branch.messageIds, entry.id] } : branch)
     return { ...record, entries: [...record.entries, entry], conversation: { ...record.conversation, branches, updatedAt: Date.now() } }
   }
@@ -164,7 +182,7 @@ export class Turns {
     this.chats.running.delete(id)
     const current = this.chats.deleting.has(id) ? undefined : this.chats.raw(id)
     if (!current) return
-    const record = reply ? this.withMessage(current, turn, reply) : current
+    const record = reply ? this.withMessage(current, turn, reply, [], turn.sources) : current
     await this.chats.saveRecord({ ...record, running: false, error: outcome, conversation: { ...record.conversation, updatedAt: Date.now() } })
   }
   private async runTurn(id: ConversationId, turn: RunningTurn): Promise<void> {
@@ -197,7 +215,7 @@ export class Turns {
           }
         }
         if ([...images.values()].flat().reduce((sum, image) => sum + image.base64.length, 0) > 32 * 1024 * 1024) throw new PersonalChatError('image-limit', 'The selected history exceeds the 32 MiB inline image budget; start a shorter branch')
-        const tools = toolSchemas({ temporary: record.conversation.temporary, attachments: record.attachments.length > 0, office: !!this.ctx.get('personalChatOffice'), web: turn.web && !!this.ctx.get('web') })
+        const tools = toolSchemas({ temporary: record.conversation.temporary, attachments: record.attachments.length > 0, office: !!this.ctx.get('personalChatOffice'), web: turn.web && !!this.ctx.get('web'), history: !record.conversation.temporary && this.chats.domain.global.get().profile.referenceChats })
         await this.chats.serial(async () => {
           if (this.chats.deleting.has(id)) throw new PersonalChatError('not-found', 'Chat is being deleted')
           const current = this.chats.record(id)

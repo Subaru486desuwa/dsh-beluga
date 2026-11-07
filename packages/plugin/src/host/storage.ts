@@ -12,7 +12,9 @@ import { pacing } from './pacing.ts'
 import { archiveRecord, chatEntry, consistent, conversationHead, importBatch, memoryLedger, textOf, type ArchiveRecord, type ConversationRecord, type MemoryLedger } from './records.ts'
 import type * as T from '../shared/types.ts'
 
-const VERSION = 2
+const VERSION = 3
+/** Statements that lift a database from the version they are keyed by to the next one. */
+const UPGRADES: Readonly<Record<number, string>> = { 2: 'ALTER TABLE personal_chat_conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;' }
 /** Bounds the assembled conversations held in memory, counted in entries. */
 const CACHED_ENTRIES = 20000
 /**
@@ -21,11 +23,14 @@ const CACHED_ENTRIES = 20000
  * size, and removing one 4 KiB document without leaving postings behind took over a second.
  */
 const SCAN_WINDOW = 64
+/** Bounds what one search of earlier chats can place in a model request. */
+const EXCERPT_CHATS = 8
+const EXCERPT_CHARS = 400
 const SCHEMA = `
 CREATE TABLE personal_chat_meta(version INTEGER NOT NULL);
 INSERT INTO personal_chat_meta(version) VALUES(${VERSION});
 CREATE TABLE personal_chat_records(kind TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,id));
-CREATE TABLE personal_chat_conversations(id TEXT PRIMARY KEY, title TEXT NOT NULL, title_key TEXT NOT NULL, updated_at INTEGER NOT NULL, archived INTEGER NOT NULL, listed INTEGER NOT NULL, pending INTEGER NOT NULL, value TEXT NOT NULL);
+CREATE TABLE personal_chat_conversations(id TEXT PRIMARY KEY, title TEXT NOT NULL, title_key TEXT NOT NULL, updated_at INTEGER NOT NULL, archived INTEGER NOT NULL, listed INTEGER NOT NULL, pending INTEGER NOT NULL, value TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE personal_chat_entries(conversation_id TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(conversation_id,seq));
 CREATE TABLE personal_chat_documents(id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, value TEXT NOT NULL);
 CREATE INDEX personal_chat_document_owner ON personal_chat_documents(conversation_id);
@@ -44,7 +49,19 @@ interface Table<K extends string, V> {
   put(key: K, value: V): Promise<void>
   delete(key: K): Promise<boolean>
 }
-const initial: MemoryLedger = { profile: { revision: 0, background: '', instructions: '', autoSaveLowRisk: true, updatedAt: 0 }, memories: [], candidates: [], suppressed: [] }
+const initial: MemoryLedger = { profile: { revision: 0, background: '', instructions: '', autoSaveLowRisk: true, referenceChats: true, updatedAt: 0 }, memories: [], candidates: [], suppressed: [] }
+/** One match in an earlier chat, for the model to quote. */
+export interface ChatExcerpt { readonly conversationId: T.ConversationId; readonly title: string; readonly updatedAt: number; readonly excerpt: string }
+/** The statements needed to reach this version; a database they cannot lift is left untouched. */
+function upgradesFrom(version: number): string {
+  let statements = ''
+  for (let step = version; step !== VERSION; step++) {
+    const upgrade = UPGRADES[step]
+    if (!upgrade) throw new PersonalChatError('storage-version', 'This plugin cannot read the stored data version')
+    statements += upgrade
+  }
+  return statements
+}
 function decode<V>(schema: z.ZodType<V>, value: unknown): V {
   try { return schema.parse(JSON.parse(String(value))) }
   catch { throw new PersonalChatError('invalid-storage', 'A stored personal record cannot be decoded; restore a valid backup before continuing') }
@@ -74,9 +91,10 @@ export class PersonalStore {
       db.exec('PRAGMA busy_timeout=5000')
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()
       if (tables.length && !tables.some(row => row.name === 'personal_chat_meta')) throw new PersonalChatError('invalid-storage', 'The configured database belongs to another application')
-      if (tables.length && db.prepare('SELECT version FROM personal_chat_meta').get()?.version !== VERSION) throw new PersonalChatError('storage-version', 'This plugin cannot read the stored data version')
+      const upgrade = tables.length ? upgradesFrom(Number(db.prepare('SELECT version FROM personal_chat_meta').get()?.version)) : ''
       db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;')
       if (!tables.length) db.exec('BEGIN IMMEDIATE;' + SCHEMA + 'COMMIT;')
+      if (upgrade) db.exec(`BEGIN IMMEDIATE;${upgrade}UPDATE personal_chat_meta SET version=${VERSION};COMMIT;`)
       store = new PersonalStore(db, release)
       return store
     } catch (error) { db?.close(); await release(); throw error }
@@ -135,13 +153,14 @@ export class PersonalStore {
     const head = conversationHead.parse(rest)
     const record: ConversationRecord = { ...head, entries: [...known, ...added], ...(addedDocuments.length || stored?.documents ? { documents: allDocuments } : {}) }
     if (!consistent(record)) throw new PersonalChatError('invalid-storage', 'Conversation identities or owned references are inconsistent')
-    const { title, updatedAt, archived, branches, archiveRevisions } = head.conversation
+    const { title, updatedAt, archived, pinned, branches, archiveRevisions } = head.conversation
     this.atomic(() => {
-      this.sql('INSERT INTO personal_chat_conversations(id,title,title_key,updated_at,archived,listed,pending,value) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,title_key=excluded.title_key,updated_at=excluded.updated_at,archived=excluded.archived,listed=excluded.listed,pending=excluded.pending,value=excluded.value')
-        .run(id, title, normalized(title), updatedAt, archived ? 1 : 0, !head.deleting && (branches.length > 0 || archiveRevisions.length > 0) ? 1 : 0, head.deleting || head.running ? 1 : 0, JSON.stringify(head))
+      this.sql('INSERT INTO personal_chat_conversations(id,title,title_key,updated_at,archived,listed,pending,value,pinned) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,title_key=excluded.title_key,updated_at=excluded.updated_at,archived=excluded.archived,listed=excluded.listed,pending=excluded.pending,value=excluded.value,pinned=excluded.pinned')
+        .run(id, title, normalized(title), updatedAt, archived ? 1 : 0, !head.deleting && (branches.length > 0 || archiveRevisions.length > 0) ? 1 : 0, head.deleting || head.running ? 1 : 0, JSON.stringify(head), pinned ? 1 : 0)
       for (const [offset, entry] of added.entries()) {
         this.sql('INSERT INTO personal_chat_entries(conversation_id,seq,value) VALUES(?,?,?)').run(id, known.length + offset, JSON.stringify(entry))
-        this.index(id, null, normalized(entry.userText ?? textOf(entry.message)))
+        // Tool output is not conversation: it can quote web pages, or a memory forgotten later.
+        if (entry.message.role !== 'tool') this.index(id, null, normalized(entry.userText ?? textOf(entry.message)))
       }
       for (const [key, document] of addedDocuments) this.sql('INSERT INTO personal_chat_documents(id,conversation_id,value) VALUES(?,?,?)').run(key, id, JSON.stringify(document))
     })
@@ -164,16 +183,40 @@ export class PersonalStore {
   /**
    * List conversations from plain columns, without decoding any conversation.
    * @param filter - `query` is a substring of a title, a message or an imported node.
-   * @returns matching summaries, newest first.
+   * @returns matching summaries, pinned ones first, then newest first.
    */
   async catalog(filter: { readonly query: string; readonly archived: boolean }): Promise<T.ConversationSummary[]> {
     this.available()
     const query = normalized(filter.query)
     const containing = query ? await this.containing(query) : undefined
     this.available()
-    return this.sql('SELECT id,title,title_key,updated_at FROM personal_chat_conversations WHERE listed=1 AND archived=? ORDER BY updated_at DESC').all(filter.archived ? 1 : 0)
+    return this.sql('SELECT id,title,title_key,updated_at,pinned FROM personal_chat_conversations WHERE listed=1 AND archived=? ORDER BY pinned DESC, updated_at DESC').all(filter.archived ? 1 : 0)
       .filter(row => !containing || containing.has(String(row.id)) || String(row.title_key).includes(query))
-      .map(row => ({ id: brandString<T.ConversationId>(String(row.id)), title: String(row.title), updatedAt: Number(row.updated_at) }))
+      .map(row => ({ id: brandString<T.ConversationId>(String(row.id)), title: String(row.title), updatedAt: Number(row.updated_at), pinned: row.pinned === 1 }))
+  }
+  /**
+   * Find what earlier chats said, most recent first, for one model tool call.
+   * Imported history stays out: it reaches a model only when the user continues it.
+   * @param query - a substring of a message.
+   * @param asking - the chat that is asking; its own text is already in context.
+   * @returns one excerpt from each matching active chat, up to {@link EXCERPT_CHATS}.
+   */
+  async excerpts(query: string, asking: T.ConversationId): Promise<ChatExcerpt[]> {
+    const needle = normalized(query)
+    const found = new Map<string, ChatExcerpt>()
+    const pause = pacing()
+    let high = Number(this.sql('SELECT COALESCE(MAX(id),0) AS id FROM personal_chat_search_text').get()!.id)
+    while (high > 0 && found.size < EXCERPT_CHATS) {
+      this.available()
+      const rows = this.sql('SELECT s.conversation_id AS id,c.title,c.updated_at,substr(s.text,MAX(instr(s.text,?)-?,1),?) AS excerpt FROM personal_chat_search_text s JOIN personal_chat_conversations c ON c.id=s.conversation_id WHERE s.id>? AND s.id<=? AND s.revision_id IS NULL AND instr(s.text,?)>0 AND c.listed=1 AND c.archived=0 AND c.id<>? ORDER BY s.id DESC').all(needle, EXCERPT_CHARS / 2, EXCERPT_CHARS, high - SCAN_WINDOW, high, needle, asking)
+      for (const row of rows) {
+        const conversationId = brandString<T.ConversationId>(String(row.id))
+        if (!found.has(conversationId) && found.size < EXCERPT_CHATS) found.set(conversationId, { conversationId, title: String(row.title), updatedAt: Number(row.updated_at), excerpt: String(row.excerpt) })
+      }
+      high -= SCAN_WINDOW
+      await pause()
+    }
+    return [...found.values()]
   }
   /** Scan in windows so a large history never holds the Host for a whole search. */
   private async containing(query: string): Promise<Set<string>> {

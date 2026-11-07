@@ -14,8 +14,11 @@ The base plugin contains Chat and Memory. Office capabilities are a separately d
 - The plugin owns its message journal, model turns, attachments, catalog, branches and persistence. It never creates, forks, deletes or claims a native Work Session and does not patch or replace official module ids.
 - Stream replies, Stop and recover from errors/reconnection. Edit a historical user message or regenerate an assistant reply into a new persistent branch; retain the old branch.
 - Search titles/body, rename, archive/restore and actually delete the owned Chat plus its owned attachments. Deletion stops active writers and remains retryable after failures.
+- Pin a Chat to the top of its list without counting as activity. Export a saved Chat as Markdown in the browser; tool output and reasoning stay out.
+- List the web pages a reply consulted beneath it as links. Read a reply aloud with voices on the user's device only; never fall back to a network voice.
 - Support owned text documents and extractable-text PDFs, images on explicitly supported model routes, and optional existing web search/fetch. Unsupported image/model or scanned PDF paths must fail clearly before pretending content was read. No arbitrary filesystem, shell, deployment, subagent or plugin-install tools.
 - A compact stable profile and custom instructions do not depend on keyword recall. Relevant memories keep source/scope/revision. Explicit remember and clear low-risk facts can save with feedback/undo; sensitive, inferred or conflicting candidates require confirmation. Corrections supersede old facts and forget suppresses automatic relearning.
+- While replying, the model may search the user's earlier active plugin chats for bounded excerpts, behind a default-on profile switch. Temporary Chat never has this tool or reads the store for it. Imported originals stay out, and tool output is not indexed.
 - Temporary Chat is immutable per new conversation: no local persistent history, drafts, attachments, snapshots or long-term memory read/write. Keep bytes and live state in memory; close disposes the lifecycle. No native Session is created just to obtain LLM access. Validate official no-sessionId text provider paths; image paths must use a verified in-memory resolver/adapter, not stock attachment storage or forced-error fallback.
 - One-click official ChatGPT ZIP/JSON import: select, preview recognized conversations/warnings/limits, confirm once, commit and report. Preserve original JSON, roles, times, complete mapping graph/current_node, all branches and unknown fields/media references. Do not flatten branches by timestamp, silently truncate records, fetch embedded URLs or extract arbitrary ZIP paths.
 - Deduplicate repeated import; preserve revisions for changed source content. Batch undo removes only that batch's ownership, not previous imports or later plugin conversations.
@@ -23,6 +26,7 @@ The base plugin contains Chat and Memory. Office capabilities are a separately d
 - Import reviewed saved-memory text/JSON and personal instructions/Markdown with source file names. AGENTS input requires visible review and an explicit personal scope; it does not rewrite Work AGENTS or automatically promote engineering rules.
 - Single self-hosted owner first. No multi-tenant billing, voice/realtime screen, image generation or scheduled tasks in this release.
 - Source files, existing Work data and daily DSH are untouched. No personal export bodies or credentials in Git, fixtures, diagnostics or screenshots used for public contribution.
+- Stored data carries a version. Additive upgrades run in one transaction on open; a version with no upgrade path is refused and left untouched.
 
 ## Implementation approach
 

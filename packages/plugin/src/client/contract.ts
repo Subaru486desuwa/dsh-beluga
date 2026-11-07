@@ -12,6 +12,7 @@ export interface PersonalCommands {
   releaseTemporary(id: ConversationId): void
   rename(title: string): Promise<boolean>
   archive(value: boolean): Promise<boolean>
+  pin(value: boolean): Promise<boolean>
   delete(): Promise<boolean>
   search(query: string, archived: boolean): void
   selectBranch(id: BranchId): Promise<boolean>

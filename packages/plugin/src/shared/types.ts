@@ -34,6 +34,7 @@ export interface Conversation {
   readonly selectedBranchId?: BranchId
   readonly archiveRevisions: readonly ArchiveRevisionId[]
   readonly selectedArchive?: ArchiveSelection
+  readonly pinned?: boolean
   /** Later plugin conversation messages remain after import withdrawal. */
   readonly archiveWithdrawn: boolean
 }
@@ -42,6 +43,7 @@ export interface ConversationSummary {
   readonly id: ConversationId
   readonly title: string
   readonly updatedAt: number
+  readonly pinned: boolean
 }
 export interface ArchiveNode {
   readonly id: string
@@ -65,6 +67,11 @@ export interface ArchiveView {
   readonly original: Record<string, JsonValue>
   readonly warnings: readonly string[]
 }
+/** A page a reply consulted. */
+export interface WebSource {
+  readonly url: string
+  readonly title?: string
+}
 export interface ChatMessageView {
   readonly id: string
   readonly role: 'user' | 'assistant' | 'tool'
@@ -73,6 +80,7 @@ export interface ChatMessageView {
   readonly time: number
   readonly attachmentIds: readonly string[]
   readonly toolNames: readonly string[]
+  readonly sources?: readonly WebSource[]
 }
 export interface ArtifactVersion {
   readonly rootId: string
@@ -144,6 +152,8 @@ export interface PersonalProfile {
   readonly source?: ProfileImportSource
   readonly instructions: string
   readonly autoSaveLowRisk: boolean
+  /** Whether the model may search earlier chats while replying. */
+  readonly referenceChats: boolean
   readonly updatedAt: number
 }
 export type MemorySource =
@@ -219,6 +229,7 @@ export interface PersonalChatOperations {
   get(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail>
   rename(request: { readonly conversationId: ConversationId; readonly title: string }): Promise<Conversation>
   setArchived(request: { readonly conversationId: ConversationId; readonly archived: boolean }): Promise<Conversation>
+  setPinned(request: { readonly conversationId: ConversationId; readonly pinned: boolean }): Promise<Conversation>
   deleteConversation(request: { readonly conversationId: ConversationId }): Promise<void>
   closeTemporary(request: { readonly conversationId: ConversationId }): Promise<void>
   selectBranch(request: { readonly conversationId: ConversationId; readonly branchId: BranchId }): Promise<ConversationDetail>
@@ -231,7 +242,7 @@ export interface PersonalChatOperations {
   listImports(): Promise<readonly ImportBatch[]>
   undoImport(request: { readonly batchId: ImportBatchId }): Promise<ImportUndoResult>
   memoryState(request: { readonly conversationId?: ConversationId }): Promise<MemoryState>
-  updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile>
+  updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly referenceChats: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile>
   proposeMemory(request: CandidateInput): Promise<MemoryCandidate>
   decideCandidate(request: { readonly conversationId?: ConversationId; readonly candidateId: CandidateId; readonly expectedRevision: number; readonly decision: 'confirm' | 'reject' }): Promise<MemoryCandidate>
   editMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number; readonly text: string }): Promise<Memory>

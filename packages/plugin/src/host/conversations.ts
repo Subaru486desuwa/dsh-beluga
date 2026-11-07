@@ -6,7 +6,7 @@ import type { Config } from './config.ts'
 import type { DocumentInput } from './documents.ts'
 import type { PersonalDomain } from './storage.ts'
 import type { ModelRef } from '../shared/models.ts'
-import type { ArchiveRevisionId, ArchiveSelection, BranchId, ChatAttachment, ChatUpdate, Conversation, ConversationDetail, ConversationId, LiveTurn, PersonalChange } from '../shared/types.ts'
+import type { ArchiveRevisionId, ArchiveSelection, BranchId, ChatAttachment, ChatUpdate, Conversation, ConversationDetail, ConversationId, LiveTurn, PersonalChange, WebSource } from '../shared/types.ts'
 
 /** Bounds the parsed imports held in memory, counted in nodes. */
 const CACHED_ARCHIVE_NODES = 20000
@@ -18,6 +18,7 @@ export interface RunningTurn {
   readonly model: ModelRef
   readonly web: boolean
   readonly controller: AbortController
+  readonly sources: WebSource[]
   text: string
   reasoning: string
   tool?: string
@@ -133,7 +134,7 @@ export class Conversations {
       const role = entry.message.role
       if (role !== 'user' && role !== 'assistant' && role !== 'tool') throw new PersonalChatError('invalid-storage', 'Unsupported chat message role')
       const reasoning = entry.message.content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
-      return { id, role, text: entry.userText ?? textOf(entry.message), ...(reasoning ? { reasoning } : {}), time: entry.time, attachmentIds: entry.attachmentIds, toolNames: entry.message.content.filter(block => block.type === 'tool-call').map(block => block.name) }
+      return { id, role, text: entry.userText ?? textOf(entry.message), ...(reasoning ? { reasoning } : {}), time: entry.time, attachmentIds: entry.attachmentIds, toolNames: entry.message.content.filter(block => block.type === 'tool-call').map(block => block.name), ...(entry.sources ? { sources: entry.sources } : {}) }
     })
     const running = this.running.get(conversation.id)
     const live: LiveTurn | undefined = running && running.branchId === branch?.id ? { id: running.id, branchId: running.branchId, text: running.text, reasoning: running.reasoning, ...(running.tool ? { tool: running.tool } : {}) } : undefined

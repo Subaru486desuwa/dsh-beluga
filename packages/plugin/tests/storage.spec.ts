@@ -139,8 +139,8 @@ describe('catalog', () => {
     const deleting = { ...chat([], 'Deleting', { updatedAt: 50 }), deleting: true }
     for (const record of [older, newer, archived, empty, deleting]) store.saveConversation(record)
     expect(await store.catalog({ query: '', archived: false })).toEqual([
-      { id: newer.conversation.id, title: 'Newer', updatedAt: 20 },
-      { id: older.conversation.id, title: 'Older', updatedAt: 10 },
+      { id: newer.conversation.id, title: 'Newer', updatedAt: 20, pinned: false },
+      { id: older.conversation.id, title: 'Older', updatedAt: 10, pinned: false },
     ])
     expect((await store.catalog({ query: '', archived: true })).map(item => item.title)).toEqual(['Archived'])
   })
@@ -227,6 +227,47 @@ describe('deleted text', () => {
   })
 })
 
+describe('chat excerpts', () => {
+  const tool = (text: string): ChatEntry => {
+    const id = randomUUID()
+    return { id, time: 1, attachmentIds: [], message: { id, role: 'tool', content: [{ type: 'text', text }], source: { kind: 'tool', callId: 'call' }, toolCallId: 'call', isError: false } } as ChatEntry
+  }
+  it('returns the newest chats first with text around the match', async () => {
+    const store = await open()
+    const older = chat([entry('x'.repeat(500) + ' NEEDLE older tail ' + 'y'.repeat(500))], 'Older')
+    const newer = chat([entry('Newer NEEDLE text')], 'Newer', { updatedAt: 2 })
+    store.saveConversation(older)
+    store.saveConversation(newer)
+    const found = await store.excerpts('needle', chat().conversation.id)
+    expect(found.map(item => item.title)).toEqual(['Newer', 'Older'])
+    expect(found[1]!.excerpt).toContain('needle older tail')
+    expect(found[1]!.excerpt.length).toBeLessThanOrEqual(400)
+  })
+  it('stops at the limit and leaves out the asking chat', async () => {
+    const store = await open()
+    const chats = Array.from({ length: 12 }, (_, index) => chat([entry('needle ' + index)], 'Chat ' + index))
+    for (const item of chats) store.saveConversation(item)
+    const found = await store.excerpts('needle', chats[11]!.conversation.id)
+    expect(found).toHaveLength(8)
+    expect(found.map(item => item.title)).not.toContain('Chat 11')
+  })
+  it('leaves imported history out: it reaches a model only when the user continues it', async () => {
+    const store = await open()
+    const owner = chat([entry('plain words')], 'Imported')
+    store.saveConversation(owner)
+    store.saveArchive({ id: randomUUID() as ArchiveRevisionId, batchId: randomUUID() as ImportBatchId, conversationId: owner.conversation.id, sourceId: 's', original: { keep: true } }, 'needle in the archive')
+    expect(await store.excerpts('needle', chat().conversation.id)).toEqual([])
+    expect(await store.catalog({ query: 'needle', archived: false })).toHaveLength(1)
+  })
+  it('does not index tool output, in search or excerpts', async () => {
+    const store = await open()
+    const saved = chat([entry('Plain question'), tool('TOOLSENTINEL from a web page')])
+    store.saveConversation(saved)
+    expect(await store.catalog({ query: 'toolsentinel', archived: false })).toEqual([])
+    expect(await store.excerpts('toolsentinel', chat().conversation.id)).toEqual([])
+  })
+})
+
 describe('stored versions', () => {
   it('refuses an older database and leaves it untouched', async () => {
     const path = await mkdtemp(join(tmpdir(), 'personal-chat-storage-'))
@@ -240,6 +281,19 @@ describe('stored versions', () => {
     check.close()
     await rm(path, { recursive: true, force: true })
     expect(names).toEqual(['personal_chat_meta', 'personal_chat_records'])
+  })
+  it('upgrades a version 2 database in place and keeps its chats', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'personal-chat-storage-'))
+    const first = await PersonalStore.open(path)
+    const saved = chat([entry('Kept across the upgrade')])
+    first.saveConversation(saved)
+    await first.close()
+    const old = new DatabaseSync(join(path, 'personal-chat.sqlite3'))
+    old.exec('ALTER TABLE personal_chat_conversations DROP COLUMN pinned; UPDATE personal_chat_meta SET version=2')
+    old.close()
+    const store = await open(path)
+    expect(store.conversation(saved.conversation.id)?.entries).toHaveLength(1)
+    expect(await store.catalog({ query: 'kept across', archived: false })).toMatchObject([{ id: saved.conversation.id, pinned: false }])
   })
   it('refuses a database that belongs to another application', async () => {
     const path = await mkdtemp(join(tmpdir(), 'personal-chat-storage-'))

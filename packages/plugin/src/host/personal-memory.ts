@@ -25,14 +25,14 @@ export class PersonalMemory {
     const active = memories.filter(memory => memory.state === 'active')
     return { profile, memories: active, candidates: candidates.filter(candidate => candidate.state === 'pending' || (candidate.state === 'saved' && active.some(memory => memory.id === candidate.memoryId))) }
   }
-  async updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile> {
+  async updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly referenceChats: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile> {
     this.guard(request.conversationId)
     if (Buffer.byteLength(request.background) + Buffer.byteLength(request.instructions) > this.config.maxProfileBytes) throw new PersonalChatError('profile-limit', 'Profile and instructions exceed maxProfileBytes')
     return this.chats.serial(async () => {
       this.guard(request.conversationId)
       const ledger = this.chats.domain.global.get()
       this.revision(ledger.profile.revision, request.expectedRevision)
-      const profile: PersonalProfile = { ...(request.source ? { source: request.source } : {}), revision: ledger.profile.revision + 1, background: request.background, instructions: request.instructions, autoSaveLowRisk: request.autoSaveLowRisk, updatedAt: Date.now() }
+      const profile: PersonalProfile = { ...(request.source ? { source: request.source } : {}), revision: ledger.profile.revision + 1, background: request.background, instructions: request.instructions, autoSaveLowRisk: request.autoSaveLowRisk, referenceChats: request.referenceChats, updatedAt: Date.now() }
       await this.saveLedger({ ...ledger, profile })
       return profile
     })

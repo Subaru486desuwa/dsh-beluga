@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ButtonHTMLAttributes } from 'react'
 import { ChatComposer, ChatMessages } from '../src/client/Chat.tsx'
@@ -45,4 +45,40 @@ it('explains an output-limit cutoff instead of a generic failure and keeps retry
   expect(screen.getByRole('status').textContent).toContain('replyTruncated')
   expect(screen.queryByText(/replyError/)).toBeNull()
   expect(screen.getByRole('button', { name: 'retry' })).toBeTruthy()
+})
+const detail = (message: object) => ({ conversation: { id: 'chat' }, attachments: [], omittedMessages: 0, messages: [{ id: 'reply', role: 'assistant', text: 'Hello **there**', time: 1, attachmentIds: [], toolNames: [], ...message }] }) as unknown as PersonalState['detail']
+it('links each source of a reply in a new tab', () => {
+  const state = { busy: false, detail: detail({ sources: [{ url: 'https://example.com/a', title: 'Article' }, { url: 'https://example.org/b' }] }) } as PersonalState
+  render(<ChatMessages state={state} commands={{} as PersonalCommands} t={key => key} />)
+  const link = screen.getByRole('link', { name: 'Article' })
+  expect(link.getAttribute('href')).toBe('https://example.com/a')
+  expect(link.getAttribute('target')).toBe('_blank')
+  expect(link.getAttribute('rel')).toBe('noreferrer noopener')
+  expect(screen.getByRole('link', { name: 'example.org' })).toBeTruthy()
+})
+describe('read aloud', () => {
+  const synth = { speak: vi.fn(), cancel: vi.fn(), getVoices: vi.fn() }
+  class Utterance { voice?: unknown; onend?: () => void; constructor(readonly text: string) {} }
+  beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal('speechSynthesis', synth); vi.stubGlobal('SpeechSynthesisUtterance', Utterance) })
+  afterEach(() => vi.unstubAllGlobals())
+  const state = { busy: false, detail: detail({}) } as PersonalState
+  it('speaks plain text with a local voice and stops on a second press', () => {
+    const local = { lang: 'en-US', localService: true }
+    synth.getVoices.mockReturnValue([{ lang: 'en-US', localService: false }, local])
+    render(<ChatMessages state={state} commands={{} as PersonalCommands} t={key => key} />)
+    fireEvent.click(screen.getByRole('button', { name: 'readAloud' }))
+    const spoken = synth.speak.mock.calls[0]![0] as Utterance
+    expect(spoken.text).toBe('Hello there')
+    expect(spoken.voice).toBe(local)
+    fireEvent.click(screen.getByRole('button', { name: 'stopReading' }))
+    expect(synth.cancel).toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'readAloud' })).toBeTruthy()
+  })
+  it('never falls back to a voice that sends text off the device', () => {
+    synth.getVoices.mockReturnValue([{ lang: 'en-US', localService: false }])
+    render(<ChatMessages state={state} commands={{} as PersonalCommands} t={key => key} />)
+    fireEvent.click(screen.getByRole('button', { name: 'readAloud' }))
+    expect(synth.speak).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toBe('speechUnavailable')
+  })
 })

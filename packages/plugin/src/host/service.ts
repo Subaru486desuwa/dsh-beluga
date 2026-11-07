@@ -115,6 +115,17 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       return value
     })
   }
+  /** Pinning reorders the history without counting as activity. */
+  @Remote async setPinned(request: { readonly conversationId: ConversationId; readonly pinned: boolean }): Promise<Conversation> {
+    this.owner()
+    return this.chats.serial(async () => {
+      const { pinned: _old, ...current } = this.chats.find(request.conversationId)
+      if (current.temporary) throw new PersonalChatError('temporary-operation', 'Temporary Chat cannot be pinned')
+      const value = { ...current, ...(request.pinned ? { pinned: true } : {}) }
+      await this.chats.saveConversation(value)
+      return value
+    })
+  }
   private async cleanupConversation(id: ConversationId, record: ConversationRecord): Promise<void> {
     if (record.conversation.id !== id || record.attachments.some(asset => asset.conversationId !== id)) throw new PersonalChatError('invalid-storage', 'Attachment ownership is inconsistent')
     if (!record.conversation.temporary) await this.memory.releaseConversation(id)
@@ -347,7 +358,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
   /** Read confirmed and pending state; temporary callers are denied before the ledger read. */
   @Remote async memoryState(request: { readonly conversationId?: ConversationId }): Promise<MemoryState> { this.owner(); return this.memory.state(request) }
   /** Replace the compact profile and custom instructions with optimistic concurrency. */
-  @Remote async updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile> { this.owner(); return this.memory.updateProfile(request) }
+  @Remote async updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly referenceChats: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile> { this.owner(); return this.memory.updateProfile(request) }
   /** Propose a source-grounded memory; the server decides sensitivity and automatic admission. */
   @Remote async proposeMemory(request: CandidateInput): Promise<MemoryCandidate> { this.owner(); return this.memory.propose(request) }
   /** Confirm the exact pending revision, or reject/undo a candidate and suppress resurrection. */

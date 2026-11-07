@@ -25,6 +25,8 @@ Open **Chat** in the Harness sidebar. Choose a configured model and start a conv
 
 - Stream replies, stop generation, copy messages, edit a user message or regenerate an answer. Old branches remain selectable.
 - Search titles and message bodies; rename, archive/restore, or delete a Chat and its owned attachments.
+- Pin a Chat to the top of the list, or export it as Markdown. Tool output and reasoning stay out of the export.
+- Replies that used the web list their pages beneath them. Read aloud uses only voices on your device; without one it says so rather than sending text to a speech service.
 - Upload text documents, extractable-text PDFs, and supported images. Scanned PDFs need OCR outside this plugin. Images require the explicit inline route below.
 - Web access is off by default. Turn it on for a request to use an existing Harness web provider; Chat never receives shell, arbitrary filesystem or deployment tools.
 
@@ -43,6 +45,8 @@ Defaults: 64 MiB upload, 256 MiB extracted conversation JSON, 10,000 conversatio
 **Memory** contains your background, personal instructions, confirmed facts and review queue. The profile is included independently of keyword recall. Only narrowly recognized, source-grounded low-risk preferences can save automatically; sensitive, inferred and conflicting proposals require confirmation. New automatic memories offer undo. Correcting a fact supersedes it; forgetting suppresses automatic relearning of its text or old evidence.
 
 Saved-memory text/JSON and instruction Markdown can be reviewed here. Importing `AGENTS.md` requires personal-scope review; it never edits the source file or Work rules. Do not import credentials. A conversation export does not automatically reconstruct ChatGPT's separate saved-memory store.
+
+While replying, the model can search your earlier chats and quote excerpts, which go to the selected model provider. Turn this off on the Memory page. Temporary Chat, archived chats and imported originals are not searched; imported history reaches a model only when you continue it. Forgetting a memory does not delete the chat it came from, so the model may still find it there; delete that chat if needed.
 
 ## Temporary Chat
 
@@ -69,6 +73,8 @@ Select the model labeled **Inline images**. This route uses the provider API, no
 ## Data and removal
 
 Owned data lives under `$DSH_HOME/personal-chat`: a private SQLite database and attachments. Back up that directory while the profile is stopped. Deleting a chat removes its history/files but retains separately confirmed memories; forget those in Memory. Uninstalling the package does not delete personal data:
+
+A newer version upgrades the database in place on first start; older versions then refuse it, so back up first.
 
 ```sh
 dsh plugin --profile web remove dsh-beluga

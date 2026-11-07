@@ -4,7 +4,8 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatAttachment, ChatMessageView } from '../shared/types.ts'
 import type { PersonalState } from './model.ts'
 import type { PersonalCommands } from './contract.ts'
-import { withoutRemoteImages } from './markdown.ts'
+import { saveFile } from './export.ts'
+import { speakable, withoutRemoteImages } from './markdown.ts'
 import css from './PersonalChat.module.css'
 
 function FileView({ file, commands, t }: { file: ChatAttachment; commands: PersonalCommands; t: TranslateNS<'personalChat'> }) {
@@ -21,11 +22,43 @@ function FileView({ file, commands, t }: { file: ChatAttachment; commands: Perso
     const result = await commands.attachment(file.id, true)
     const raw = atob(result.base64)
     const data = Uint8Array.from(raw, char => char.charCodeAt(0))
-    const url = URL.createObjectURL(new Blob([data], { type: result.mediaType }))
-    const link = document.createElement('a'); link.href = url; link.download = result.name; link.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    saveFile(result.name, new Blob([data], { type: result.mediaType }))
   }
   return <div className={css.fileCard}>{image && <img className={css.ownImage} src={image} alt={file.name} />}<span>{file.artifact ? t('artifactVersion', { version: file.artifact.version }) : t('inputFile')} · {file.name} · {Math.ceil(file.bytes / 1024)} KB</span><Button size="sm" onClick={() => { void download().catch(() => setFailed(true)) }}>{t('download')}</Button>{file.artifact && <small>{file.artifact.summary}</small>}{failed && <span role="alert">{t('failed')}</span>}</div>
+}
+/** A network voice would send the reply to the browser vendor, so only voices on this device count. */
+function localVoice(text: string): SpeechSynthesisVoice | undefined {
+  if (!('speechSynthesis' in globalThis)) return undefined
+  const language = /\p{Script=Han}/u.test(text) ? 'zh' : navigator.language.split('-')[0]!
+  return speechSynthesis.getVoices().find(voice => voice.localService && voice.lang.toLowerCase().startsWith(language))
+}
+function ReadAloud({ text, t }: { text: string; t: TranslateNS<'personalChat'> }) {
+  const [reading, setReading] = useState(false)
+  const [unavailable, setUnavailable] = useState(false)
+  const spoken = useRef<SpeechSynthesisUtterance | undefined>(undefined)
+  useEffect(() => {
+    // Browsers load their voice list on first request, which a first press would otherwise miss.
+    if ('speechSynthesis' in globalThis) speechSynthesis.getVoices()
+    return () => { if (spoken.current) speechSynthesis.cancel() }
+  }, [])
+  const finish = () => { spoken.current = undefined; setReading(false) }
+  const toggle = () => {
+    if (reading) { speechSynthesis.cancel(); finish(); return }
+    const voice = localVoice(text)
+    setUnavailable(!voice)
+    if (!voice) return
+    const utterance = new SpeechSynthesisUtterance(speakable(text))
+    utterance.voice = voice
+    utterance.lang = voice.lang
+    utterance.onend = finish
+    utterance.onerror = finish
+    spoken.current = utterance
+    // Replaces another reply being read; the browser would otherwise queue this one behind it.
+    speechSynthesis.cancel()
+    speechSynthesis.speak(utterance)
+    setReading(true)
+  }
+  return <><Button size="sm" onClick={toggle}>{t(reading ? 'stopReading' : 'readAloud')}</Button>{unavailable && <span className={css.muted} role="alert">{t('speechUnavailable')}</span>}</>
 }
 export function ChatMessages({ state, commands, t }: { state: PersonalState; commands: PersonalCommands; t: TranslateNS<'personalChat'> }) {
   const detail = state.detail!
@@ -48,11 +81,13 @@ export function ChatMessages({ state, commands, t }: { state: PersonalState; com
             {message.reasoning && <details className={css.reasoning}><summary>{t('thinking')}</summary><div className={css.messageText}>{message.reasoning}</div></details>}
             {message.role === 'assistant' ? renderMarkdown(message.text) : <div className={css.userText}>{message.text}</div>}
             {message.toolNames.length > 0 && <div className={css.muted}>{message.toolNames.join(' · ')}</div>}
+            {message.sources && <nav className={css.sources} aria-label={t('sources')}>{message.sources.map(source => <a key={source.url} href={source.url} target="_blank" rel="noreferrer noopener">{source.title || new URL(source.url).hostname}</a>)}</nav>}
           </>}
           {message.attachmentIds.map(id => { const file = detail.attachments.find(item => item.id === id); return file ? <FileView key={id} file={file} commands={commands} t={t} /> : null })}
           {message.role !== 'tool' && <div className={css.messageActions}>
             <Button size="sm" onClick={() => { void copy(message) }}>{t(copied === message.id ? 'copied' : 'copy')}</Button>
             {message.role === 'user' ? <Button size="sm" disabled={state.busy || !!detail.live} onClick={() => setEdit({ message, text: message.text })}>{t('edit')}</Button> : <Button size="sm" disabled={state.busy || !!detail.live} onClick={() => { void commands.branch(message.id, 'regenerate') }}>{t('regenerate')}</Button>}
+            {message.role === 'assistant' && <ReadAloud text={message.text} t={t} />}
           </div>}
         </article>)}
         {detail.live && <article className={css.chatMessage} aria-live="polite">

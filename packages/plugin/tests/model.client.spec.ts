@@ -9,7 +9,7 @@ const id = brandString<ConversationId>('11111111-1111-4111-8111-111111111111')
 const revisionId = brandString<ArchiveRevisionId>('22222222-2222-4222-8222-222222222222')
 const branchId = brandString<BranchId>('33333333-3333-4333-8333-333333333333')
 const initial: ConversationDetail = { conversation: { id, title: 'Imported', temporary: false, archived: false, createdAt: 1, updatedAt: 1, branches: [], archiveRevisions: [revisionId], selectedArchive: { revisionId, nodeId: 'source-node' }, archiveWithdrawn: false }, messages: [], attachments: [], omittedMessages: 0 }
-const memory: MemoryState = { profile: { revision: 0, background: '', instructions: '', autoSaveLowRisk: true, updatedAt: 0 }, memories: [], candidates: [] }
+const memory: MemoryState = { profile: { revision: 0, background: '', instructions: '', autoSaveLowRisk: true, referenceChats: true, updatedAt: 0 }, memories: [], candidates: [] }
 async function wait(signal: AbortSignal): Promise<void> { if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true })) }
 const models: PersonalModel[] = []
 afterEach(async () => { for (const model of models.splice(0)) await model.dispose() })

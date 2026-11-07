@@ -31,6 +31,7 @@ function ProfileForm({ profile, commands, busy, t }: { profile: PersonalProfile;
     {draft.source && <p className={css.muted}>{t('importedFrom', { name: draft.source.fileName })} · {t('personalScope')}</p>}
     {fileError && <p role="alert" className={css.notice}>{t('failed')}</p>}
     <label className={css.check}><input type="checkbox" checked={draft.autoSaveLowRisk} onChange={event => { setDraft({ ...draft, autoSaveLowRisk: event.target.checked }) }} />{t('autoSave')}</label>
+    <label className={css.check}><input type="checkbox" checked={draft.referenceChats} onChange={event => { setDraft({ ...draft, referenceChats: event.target.checked }) }} />{t('referenceChats')}</label>
     <Button type="submit" variant="primary" disabled={busy}>{t('profileSave')}</Button>
   </form>
 }

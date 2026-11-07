@@ -46,7 +46,7 @@ function mountView(ctx: Context): void {
     limits: () => unwrap(remote.limits()),
     models: () => unwrap(remote.models()),
     list: request => unwrap(remote.list(request)), create: request => unwrap(remote.create(request)), get: request => unwrap(remote.get(request)),
-    rename: request => unwrap(remote.rename(request)), setArchived: request => unwrap(remote.setArchived(request)), deleteConversation: request => unwrap(remote.deleteConversation(request)), closeTemporary: request => unwrap(remote.closeTemporary(request)),
+    rename: request => unwrap(remote.rename(request)), setArchived: request => unwrap(remote.setArchived(request)), setPinned: request => unwrap(remote.setPinned(request)), deleteConversation: request => unwrap(remote.deleteConversation(request)), closeTemporary: request => unwrap(remote.closeTemporary(request)),
     send: request => unwrap(remote.send(request)), stop: request => unwrap(remote.stop(request)),
     removeAttachment: request => unwrap(remote.removeAttachment(request)),
     upload: request => unwrap(remote.upload(request)), attachment: request => unwrap(remote.attachment(request)),
@@ -61,7 +61,7 @@ function mountView(ctx: Context): void {
   const commands: PersonalCommands = {
     create: temporary => instance.run(() => instance.create(temporary)), open: id => instance.run(() => instance.open(id)), close: () => instance.run(() => instance.close()),
     releaseTemporary: id => instance.releaseTemporary(id),
-    rename: title => instance.run(() => instance.rename(title), 'changed'), archive: value => instance.run(() => instance.archive(value), 'changed'), delete: () => instance.run(() => instance.delete(), 'deleted'),
+    rename: title => instance.run(() => instance.rename(title), 'changed'), archive: value => instance.run(() => instance.archive(value), 'changed'), pin: value => instance.run(() => instance.pin(value), 'changed'), delete: () => instance.run(() => instance.delete(), 'deleted'),
     search: (query, archived) => { void instance.search(query, archived) }, selectBranch: id => instance.run(() => instance.selectBranch(id)), selectArchive: selection => instance.run(() => instance.selectArchive(selection)),
     continueArchive: text => instance.run(() => instance.continueArchive(text)), send: (text, attachments) => instance.run(() => instance.send(text, attachments)), stop: () => instance.run(() => instance.stop()), chooseModel: selected => instance.chooseModel(selected), setWeb: enabled => instance.setWeb(enabled),
     branch: (id, action, text) => instance.run(() => instance.branch(id, action, text)),

@@ -4,7 +4,7 @@ import type { ConversationId } from '../src/shared/types.ts'
 import { candidateReason, evidenceKey, fingerprint } from '../src/host/memory.ts'
 import type { MemoryLedger } from '../src/host/storage.ts'
 const source = { kind: 'chat' as const, conversationId: brandString<ConversationId>('owned'), messageId: 'm1' }
-const ledger: MemoryLedger = { profile: { revision: 0, background: '', instructions: '', autoSaveLowRisk: true, updatedAt: 0 }, memories: [], candidates: [], suppressed: [] }
+const ledger: MemoryLedger = { profile: { revision: 0, background: '', instructions: '', autoSaveLowRisk: true, referenceChats: true, updatedAt: 0 }, memories: [], candidates: [], suppressed: [] }
 describe('server memory admission', () => {
   it('autosaves only grounded low-risk preferences or explicit non-sensitive requests', () => {
     expect(candidateReason('I prefer concise answers', 'I prefer concise answers', source, ledger)).toBe('low-risk')

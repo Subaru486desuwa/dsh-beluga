@@ -5,6 +5,20 @@ import { mathFromMarkdown } from 'mdast-util-math'
 import { fromMarkdown } from 'mdast-util-from-markdown'
 import type { Root, RootContent, Definition } from 'mdast'
 
+/** Prose separators; code and formulas do not read well aloud. */
+const SPOKEN_BLOCKS = new Set(['heading', 'paragraph', 'tableCell'])
+/** @returns the words of a Markdown reply, for speech. */
+export function speakable(text: string): string {
+  const parts: string[] = []
+  const walk = (node: Root | RootContent): void => {
+    if (node.type === 'text' || node.type === 'inlineCode') parts.push(node.value)
+    else if ('children' in node) for (const child of node.children) walk(child)
+    if (SPOKEN_BLOCKS.has(node.type)) parts.push(' ')
+  }
+  walk(fromMarkdown(text, { extensions: [gfm(), math()], mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown()] }))
+  return parts.join('').replace(/\s+/gu, ' ').trim()
+}
+
 /** Keep original Markdown offsets; only image nodes become explicit links. */
 export function withoutRemoteImages(text: string, label: string, streaming = false): string {
   // Match the public renderer: streaming uses GFM, settled text also parses math.

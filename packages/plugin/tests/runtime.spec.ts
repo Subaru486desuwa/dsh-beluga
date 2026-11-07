@@ -104,7 +104,7 @@ describe('plugin-owned conversations on the real LLM service', () => {
   it('streams without creating a Work Session and survives a plugin restart', async () => {
     const app = await setup()
     const chat = await app.service.create({ temporary: false })
-    await app.service.updateProfile({ expectedRevision: 0, background: 'PROFILE_SENTINEL', instructions: 'Be concise.', autoSaveLowRisk: true })
+    await app.service.updateProfile({ expectedRevision: 0, background: 'PROFILE_SENTINEL', instructions: 'Be concise.', autoSaveLowRisk: true, referenceChats: true })
     await send(app.service, chat, 'hello')
     const done = await settled(app.service, chat.conversation.id)
     expect(done.messages.map(message => message.text)).toEqual(['hello', 'Echo: hello'])
@@ -162,7 +162,7 @@ describe('plugin-owned conversations on the real LLM service', () => {
 
   it('keeps temporary text, files and memory access out of durable state', async () => {
     const app = await setup()
-    await app.service.updateProfile({ expectedRevision: 0, background: 'PRIVATE_PROFILE_MARKER', instructions: 'PRIVATE_INSTRUCTIONS_MARKER', autoSaveLowRisk: true })
+    await app.service.updateProfile({ expectedRevision: 0, background: 'PRIVATE_PROFILE_MARKER', instructions: 'PRIVATE_INSTRUCTIONS_MARKER', autoSaveLowRisk: true, referenceChats: true })
     const chat = await app.service.create({ temporary: true })
     const file = await app.service.upload({ conversationId: chat.conversation.id, name: '../../private.txt', base64: Buffer.from('TEMPORARY_FILE_SENTINEL').toString('base64') })
     expect(file.name).toBe('private.txt')
@@ -509,7 +509,7 @@ describe('history catalog', () => {
     await settled(app.service, chat.conversation.id)
     const [item, ...others] = await app.service.list({})
     expect(others).toEqual([])
-    expect(Object.keys(item!).sort()).toEqual(['id', 'title', 'updatedAt'])
+    expect(Object.keys(item!).sort()).toEqual(['id', 'pinned', 'title', 'updatedAt'])
     expect(item!.title).toBe('A long enough first message')
   })
 
@@ -698,5 +698,123 @@ describe('turn end commit', () => {
     expect(recovered.error).toBeUndefined()
     expect(recovered.messages.map(message => message.text)).toEqual(['Hello', 'Again', 'Echo: Again'])
     expect(save).toHaveBeenCalledTimes(4)
+  })
+})
+
+describe('pinned chats', () => {
+  it('lists pinned chats first without counting the pin as activity', async () => {
+    const app = await setup()
+    const first = await app.service.create({ temporary: false })
+    await send(app.service, first, 'First chat')
+    await settled(app.service, first.conversation.id)
+    const second = await app.service.create({ temporary: false })
+    await send(app.service, second, 'Second chat')
+    await settled(app.service, second.conversation.id)
+    const before = (await app.service.get({ conversationId: first.conversation.id })).conversation.updatedAt
+    const pinned = await app.service.setPinned({ conversationId: first.conversation.id, pinned: true })
+    expect(pinned.pinned).toBe(true)
+    expect(pinned.updatedAt).toBe(before)
+    expect((await app.service.list({})).map(item => [item.id, item.pinned])).toEqual([[first.conversation.id, true], [second.conversation.id, false]])
+    await app.service.setPinned({ conversationId: first.conversation.id, pinned: false })
+    expect((await app.service.list({})).map(item => item.id)).toEqual([second.conversation.id, first.conversation.id])
+  })
+
+  it('keeps a pin across a restart and refuses Temporary Chat', async () => {
+    const app = await setup()
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Keep this')
+    await settled(app.service, chat.conversation.id)
+    await app.service.setPinned({ conversationId: chat.conversation.id, pinned: true })
+    await app.ctx.fiber.dispose()
+    resources.splice(resources.findIndex(item => item.ctx === app.ctx), 1)
+    const again = await setup(app.path)
+    expect((await again.service.list({}))[0]!.pinned).toBe(true)
+    const temporary = await again.service.create({ temporary: true })
+    await expect(again.service.setPinned({ conversationId: temporary.conversation.id, pinned: true })).rejects.toMatchObject({ reason: 'temporary-operation' })
+  })
+})
+
+describe('web sources', () => {
+  const search = (sources: readonly object[]) => ({ search: async () => ({ sources, truncated: false }), fetch: async (request: { url: string }) => ({ url: request.url, statusCode: 200, body: { kind: 'text', text: 'Page' }, truncated: false }) })
+
+  it('lists the sources a reply consulted, once each, and drops unusable addresses', async () => {
+    const app = await setup()
+    app.ctx.provide('web', search([{ url: 'https://example.com/a', title: 'Article' }, { url: 'https://example.com/a', title: 'Again' }, { url: 'https://example.com/b' }, { url: 'javascript:alert(1)', title: 'Script' }, { url: 'not a url' }]))
+    const chat = await app.service.create({ temporary: false })
+    app.adapter.nextTool = { name: 'web_search', arguments: { query: 'beluga' } }
+    await send(app.service, chat, 'Look this up', { web: true })
+    const detail = await settled(app.service, chat.conversation.id)
+    expect(detail.messages.at(-1)!.sources).toEqual([{ url: 'https://example.com/a', title: 'Article' }, { url: 'https://example.com/b' }])
+    expect(detail.messages.filter(message => message.sources)).toHaveLength(1)
+  })
+
+  it('credits a fetched page and keeps sources after a restart', async () => {
+    const app = await setup()
+    app.ctx.provide('web', search([]))
+    const chat = await app.service.create({ temporary: false })
+    app.adapter.nextTool = { name: 'web_fetch', arguments: { url: 'https://example.com/page' } }
+    await send(app.service, chat, 'Read this page', { web: true })
+    await settled(app.service, chat.conversation.id)
+    await app.ctx.fiber.dispose()
+    resources.splice(resources.findIndex(item => item.ctx === app.ctx), 1)
+    const again = await setup(app.path)
+    expect((await again.service.get({ conversationId: chat.conversation.id })).messages.at(-1)!.sources).toEqual([{ url: 'https://example.com/page' }])
+  })
+})
+
+describe('reference chat history', () => {
+  async function history(app: Awaited<ReturnType<typeof setup>>) {
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'My whale project is called BELUGASENTINEL and ships in spring')
+    await settled(app.service, chat.conversation.id)
+    return chat
+  }
+  const toolText = (app: Awaited<ReturnType<typeof setup>>) => JSON.stringify((app.adapter.requests.at(-1)!.messages as readonly { role: string }[]).filter(message => message.role === 'tool'))
+
+  it('finds excerpts from other chats for the model', async () => {
+    const app = await setup()
+    const source = await history(app)
+    const current = await app.service.create({ temporary: false })
+    app.adapter.nextTool = { name: 'search_chats', arguments: { query: 'BelugaSentinel' } }
+    await send(app.service, current, 'What did I call that project?')
+    await settled(app.service, current.conversation.id)
+    expect(app.adapter.requests[1]!.tools).toContain('search_chats')
+    const result = toolText(app)
+    expect(result).toContain('belugasentinel and ships in spring')
+    expect(result).toContain(source.conversation.id)
+  })
+
+  it('leaves out the current chat, archived chats and deleted chats', async () => {
+    const app = await setup()
+    const archived = await history(app)
+    await app.service.setArchived({ conversationId: archived.conversation.id, archived: true })
+    const deleted = await history(app)
+    await app.service.deleteConversation({ conversationId: deleted.conversation.id })
+    const current = await history(app)
+    app.adapter.nextTool = { name: 'search_chats', arguments: { query: 'belugasentinel' } }
+    await send(app.service, await app.service.get({ conversationId: current.conversation.id }), 'Search')
+    await settled(app.service, current.conversation.id)
+    expect(toolText(app)).toContain('excerpts')
+    expect(toolText(app)).not.toContain('spring')
+  })
+
+  it('is unavailable when turned off, and in Temporary Chat', async () => {
+    const app = await setup()
+    await history(app)
+    const { profile } = await app.service.memoryState({})
+    await app.service.updateProfile({ expectedRevision: profile.revision, background: '', instructions: '', autoSaveLowRisk: true, referenceChats: false })
+    const off = await app.service.create({ temporary: false })
+    app.adapter.nextTool = { name: 'search_chats', arguments: { query: 'belugasentinel' } }
+    await send(app.service, off, 'Search')
+    await settled(app.service, off.conversation.id)
+    expect(app.adapter.requests.at(-2)!.tools).not.toContain('search_chats')
+    expect(toolText(app)).not.toContain('spring')
+    await app.service.updateProfile({ expectedRevision: profile.revision + 1, background: '', instructions: '', autoSaveLowRisk: true, referenceChats: true })
+    const temporary = await app.service.create({ temporary: true })
+    app.adapter.nextTool = { name: 'search_chats', arguments: { query: 'belugasentinel' } }
+    await send(app.service, temporary, 'Search')
+    await settled(app.service, temporary.conversation.id)
+    expect(app.adapter.requests.at(-2)!.tools).not.toContain('search_chats')
+    expect(toolText(app)).not.toContain('spring')
   })
 })
