@@ -1,5 +1,5 @@
 {
-  "name": "dsh-personal-chat-workspace",
+  "name": "dsh-beluga-workspace",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.28.5",
@@ -7,7 +7,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -b tsconfig.host.json tsconfig.client.json",
     "test": "vitest run",
-    "pack": "pnpm --filter dsh-personal-chat pack --pack-destination dist && pnpm --filter dsh-personal-chat-office pack --pack-destination dist"
+    "pack": "pnpm --filter dsh-beluga pack --pack-destination dist && pnpm --filter dsh-beluga-office pack --pack-destination dist"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-typert-generator": "0.2.1-rc.3",

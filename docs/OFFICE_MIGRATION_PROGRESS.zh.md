@@ -54,4 +54,4 @@ node scripts/office-document-render.mjs
 
 Desktop：构建通过，51 项测试通过。基础包不含 Office 依赖或自动安装 patch；独立 Office tarball 包含 docx/XML 引擎。运行测试覆盖基础包隐藏工具、拒绝模型伪造的办公/安装调用、显式加载扩展后生成、卸载后停止处理且仍能下载历史产物，以及无扩展重启读取旧数据。基础包上传 Office 只保管原件，不解析。
 
-产物位于 `dist/dsh-personal-chat-0.1.0.tgz` 与 `dist/dsh-personal-chat-office-0.1.0.tgz`；证据在 `.artifacts/office-split/`。没有修改日用安装。当前用户同意入口是显式 Harness 插件安装操作；尚未新增聊天内一键安装确认界面。
+产物位于 `dist/dsh-beluga-0.1.0.tgz` 与 `dist/dsh-beluga-office-0.1.0.tgz`；证据在 `.artifacts/office-split/`。没有修改日用安装。当前用户同意入口是显式 Harness 插件安装操作；尚未新增聊天内一键安装确认界面。

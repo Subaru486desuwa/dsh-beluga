@@ -1,19 +1,19 @@
 {
-  "name": "dsh-personal-chat-office",
+  "name": "dsh-beluga-office",
   "version": "0.1.0",
-  "description": "Opt-in Office extension for Personal Chat",
+  "description": "Opt-in Office extension for Beluga",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Subaru486desuwa/dsh-chat.git",
+    "url": "git+https://github.com/Subaru486desuwa/dsh-beluga.git",
     "directory": "packages/office"
   },
-  "homepage": "https://github.com/Subaru486desuwa/dsh-chat#readme",
+  "homepage": "https://github.com/Subaru486desuwa/dsh-beluga#readme",
   "bugs": {
-    "url": "https://github.com/Subaru486desuwa/dsh-chat/issues"
+    "url": "https://github.com/Subaru486desuwa/dsh-beluga/issues"
   },
   "engines": {
     "node": ">=24.9.0",
@@ -38,11 +38,11 @@
     "fflate": "0.8.2"
   },
   "peerDependencies": {
-    "dsh-personal-chat": "0.1.0",
+    "dsh-beluga": "0.1.0",
     "@deepseek-ai/cordis": "4.0.5"
   },
   "devDependencies": {
-    "dsh-personal-chat": "workspace:*",
+    "dsh-beluga": "workspace:*",
     "@deepseek-ai/cordis": "4.0.5"
   }
 }

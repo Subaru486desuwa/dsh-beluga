@@ -18,10 +18,10 @@
       "node"
     ],
     "paths": {
-      "dsh-personal-chat/types": [
+      "dsh-beluga/types": [
         "./packages/plugin/src/shared/types.ts"
       ],
-      "dsh-personal-chat/models": [
+      "dsh-beluga/models": [
         "./packages/plugin/src/shared/models.ts"
       ]
     }

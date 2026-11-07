@@ -1,10 +1,12 @@
-# DeepSeek Harness Personal Chat
+# 白鲸 Beluga
+
+DeepSeek Harness 的个人 Chat 插件，名字来自最爱“说话”的鲸鱼之一。
 
 [English](README.md)
 
 用一个插件，在 Harness 的 Work 旁增加个人 Chat、ChatGPT 历史导入、用户画像和可控记忆。Chat 不要求选择仓库，也不会把个人聊天伪装成 Work 执行记录。
 
-Chat 插件基础安装仅提供 **Chat 与 Memory**（含历史导入等已有能力）。**Word／PPT／Excel 办公扩展推荐但不预装**：必须由用户明确同意后，单独下载并启用 `dsh-personal-chat-office`。基础包不依赖办公包，也不包含其文件处理库；模型和上传文件均不能触发自动安装。
+Chat 插件基础安装仅提供 **Chat 与 Memory**（含历史导入等已有能力）。**Word／PPT／Excel 办公扩展推荐但不预装**：必须由用户明确同意后，单独下载并启用 `dsh-beluga-office`。基础包不依赖办公包，也不包含其文件处理库；模型和上传文件均不能触发自动安装。
 
 ## 安装构建好的插件
 
@@ -13,7 +15,7 @@ Chat 插件基础安装仅提供 **Chat 与 Memory**（含历史导入等已有�
 将构建好的 tarball 安装到所选 **web** profile，再重启该 profile：
 
 ```sh
-dsh plugin --profile web add ./dsh-personal-chat-0.1.0.tgz
+dsh plugin --profile web add ./dsh-beluga-0.1.0.tgz
 dsh --profile web
 ```
 
@@ -70,7 +72,7 @@ dsh --profile web
 插件数据在 `$DSH_HOME/personal-chat`：私有 SQLite 数据库及附件。备份时先停止该 profile。删除聊天会清理其历史和附件，但单独确认过的记忆仍保留，需要在记忆页另行忘记。卸载不删除个人数据：
 
 ```sh
-dsh plugin --profile web remove dsh-personal-chat
+dsh plugin --profile web remove dsh-beluga
 ```
 
 多个 profile 同时运行时应使用不同 `dataDir`；写入锁会阻止多个实例共用同一数据库。
@@ -80,13 +82,13 @@ dsh plugin --profile web remove dsh-personal-chat
 确认愿意下载办公依赖并启用文件处理后，再在已安装 Chat 的同一 profile 执行：
 
 ```sh
-dsh plugin --profile web add ./dsh-personal-chat-office-0.1.0.tgz
+dsh plugin --profile web add ./dsh-beluga-office-0.1.0.tgz
 ```
 
 重启该 profile 后生效。未安装时可保管和下载 Office 原件，但不会向模型提供办公生成或编辑工具。卸载办公扩展只停止处理能力，保留聊天、记忆和已有产物下载：
 
 ```sh
-dsh plugin --profile web remove dsh-personal-chat-office
+dsh plugin --profile web remove dsh-beluga-office
 ```
 
 两个包目前均未发布到公共市场；上述路径指自行构建或明确取得的 tarball。

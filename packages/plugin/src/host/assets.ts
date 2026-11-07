@@ -65,7 +65,7 @@ export class AssetRepository {
     else if (officeFormat(attachment.name)) {
       const office = this.office()
       extracted = office ? office.extractText(bytes, attachment.name, this.config.maxAttachmentBytes, signal)
-        : { name: attachment.name, status: 'unsupported', text: '', truncated: false, reason: 'Office extension is not installed or enabled. Ask the user to install dsh-personal-chat-office explicitly; never install it automatically.' }
+        : { name: attachment.name, status: 'unsupported', text: '', truncated: false, reason: 'Office extension is not installed or enabled. Ask the user to install dsh-beluga-office explicitly; never install it automatically.' }
     }
     else {
       try {

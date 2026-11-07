@@ -1,5 +1,5 @@
 {
-  "name": "dsh-personal-chat-acceptance-fixture",
+  "name": "dsh-beluga-acceptance-fixture",
   "private": true,
   "type": "module",
   "peerDependencies": {

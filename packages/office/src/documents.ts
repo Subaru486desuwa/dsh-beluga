@@ -1,5 +1,5 @@
 import { Document, HeadingLevel, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from 'docx'
-import { validateDocument, type DocumentInput } from 'dsh-personal-chat'
+import { validateDocument, type DocumentInput } from 'dsh-beluga'
 export async function renderDocument(input: DocumentInput, signal: AbortSignal): Promise<Uint8Array> {
   signal.throwIfAborted()
   const source = validateDocument(input)

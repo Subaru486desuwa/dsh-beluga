@@ -2,8 +2,8 @@
 import { Unzip, UnzipInflate } from 'fflate'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
 import { posix } from 'node:path'
-import { PersonalChatError, officeFormat } from 'dsh-personal-chat'
-import type { AttachmentText } from 'dsh-personal-chat'
+import { PersonalChatError, officeFormat } from 'dsh-beluga'
+import type { AttachmentText } from 'dsh-beluga'
 
 function fail(message: string): never { throw new PersonalChatError('invalid-office', message) }
 interface Node { tag: string; attrs: Record<string, string>; children: Node[]; text: string }

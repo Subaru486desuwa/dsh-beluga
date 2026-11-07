@@ -1,7 +1,7 @@
 {
-  "name": "dsh-personal-chat",
+  "name": "dsh-beluga",
   "version": "0.1.0",
-  "description": "Personal Chat, portable conversation history and controlled memory inside DeepSeek Harness",
+  "description": "Personal Chat, portable history and controlled memory for DeepSeek Harness",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -12,12 +12,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Subaru486desuwa/dsh-chat.git",
+    "url": "git+https://github.com/Subaru486desuwa/dsh-beluga.git",
     "directory": "packages/plugin"
   },
-  "homepage": "https://github.com/Subaru486desuwa/dsh-chat#readme",
+  "homepage": "https://github.com/Subaru486desuwa/dsh-beluga#readme",
   "bugs": {
-    "url": "https://github.com/Subaru486desuwa/dsh-chat/issues"
+    "url": "https://github.com/Subaru486desuwa/dsh-beluga/issues"
   },
   "keywords": [
     "deepseek-harness",

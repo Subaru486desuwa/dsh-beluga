@@ -9,7 +9,7 @@ pnpm test
 pnpm run pack
 ```
 
-The base tarball is `dist/dsh-personal-chat-0.1.0.tgz`; the separately installed extension is `dist/dsh-personal-chat-office-0.1.0.tgz`. Build generates strict Host/Client Remote codecs from authored types, compiles both faces, and bundles the public lazy-CJS browser entry. rc.3's Typert generator identifies protocol/brand/JSON declarations through a workspace inventory; the build registers the installed pinned SDK declarations through its public analyzer cache. No runtime host patch or copied SDK declaration is required.
+The base tarball is `dist/dsh-beluga-0.1.0.tgz`; the separately installed extension is `dist/dsh-beluga-office-0.1.0.tgz`. Build generates strict Host/Client Remote codecs from authored types, compiles both faces, and bundles the public lazy-CJS browser entry. rc.3's Typert generator identifies protocol/brand/JSON declarations through a workspace inventory; the build registers the installed pinned SDK declarations through its public analyzer cache. No runtime host patch or copied SDK declaration is required.
 
 `tests/runtime.spec.ts` intentionally imports the built host artifact. Run `build` before the suite. Fixtures contain only synthetic data; never commit personal exports, database files, API keys or authenticated preview URLs.
 
@@ -21,7 +21,7 @@ Check streaming/Stop, edit and branch switching, import preview/confirm/re-impor
 
 ## Publishing and market contribution
 
-The source is hosted at <https://github.com/Subaru486desuwa/dsh-chat>. npm publication and market listing are separate actions. Do not claim an unpublished npm package can be installed by name.
+The source is hosted at <https://github.com/Subaru486desuwa/dsh-beluga>. npm publication and market listing are separate actions. Do not claim an unpublished npm package can be installed by name.
 
 Publish the built base and Office packages independently, or attach their separate tarballs to a Git release only when authorized. The root is a development workspace, not a directly installable Git plugin. For market discovery, submit the real npm package or supported Git source to the chosen index maintainer after publication. The official market supports third-party index sources; a source repository by itself is not automatic admission to a public index.
 

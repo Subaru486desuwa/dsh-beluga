@@ -1,18 +1,20 @@
-# Personal Chat for DeepSeek Harness
+# Beluga
+
+Personal Chat for DeepSeek Harness, named after one of the most vocal whales.
 
 [中文](README.zh.md)
 
 One plugin adds personal Chat beside Harness Work: conversations, ChatGPT history import, a reviewed personal profile, and controlled memory. Work keeps its own sessions and tools; Chat needs no repository.
 
-The base plugin provides Chat and Memory. Office is a recommended but separately downloaded extension, `dsh-personal-chat-office`, installed only after explicit user consent. The base package does not depend on Office or ship its processing libraries. Neither models nor uploads can install extensions.
+The base plugin provides Chat and Memory. Office is a recommended but separately downloaded extension, `dsh-beluga-office`, installed only after explicit user consent. The base package does not depend on Office or ship its processing libraries. Neither models nor uploads can install extensions.
 
 ## Build from source
 
 No release tarball or npm package exists yet. Build one with Node 24.9+ and pnpm:
 
 ```sh
-git clone https://github.com/Subaru486desuwa/dsh-chat.git
-cd dsh-chat
+git clone https://github.com/Subaru486desuwa/dsh-beluga.git
+cd dsh-beluga
 pnpm install --frozen-lockfile
 pnpm run build
 pnpm run pack
@@ -27,7 +29,7 @@ Target: **unmodified DeepSeek Harness 0.2.1-rc.3**, Node **24.9+**. This is a pr
 Install a built release tarball into your chosen **web** profile, then restart that profile:
 
 ```sh
-dsh plugin --profile web add ./dsh-personal-chat-0.1.0.tgz
+dsh plugin --profile web add ./dsh-beluga-0.1.0.tgz
 dsh --profile web
 ```
 
@@ -83,7 +85,7 @@ Select the model labeled **Inline images**. This route uses the provider API, no
 Owned data lives under `$DSH_HOME/personal-chat`: a private SQLite database and attachments. Back up that directory while the profile is stopped. Deleting a chat removes its history/files but retains separately confirmed memories; forget those in Memory. Uninstalling the package does not delete personal data:
 
 ```sh
-dsh plugin --profile web remove dsh-personal-chat
+dsh plugin --profile web remove dsh-beluga
 ```
 
 Use a distinct `dataDir` for each concurrently running profile; the writer lease prevents two instances from sharing the same database.
@@ -92,4 +94,4 @@ Use a distinct `dataDir` for each concurrently running profile; the writer lease
 
 After explicit installation of the Office extension, DOCX, XLSX and PPTX support structured source reading. Word generation creates editable headings, paragraphs and tables; subsequent block edits preserve previous artifact versions. Editing uploaded templates, Excel/PPT authoring and in-chat Office previews are not yet available.
 
-Install the Office tarball into the existing Chat profile only after the user agrees: `dsh plugin --profile web add ./dsh-personal-chat-office-0.1.0.tgz`, then restart that profile. Removing `dsh-personal-chat-office` disables processing while retaining chats, memory and existing artifact downloads. Neither package is published to the public market yet.
+Install the Office tarball into the existing Chat profile only after the user agrees: `dsh plugin --profile web add ./dsh-beluga-office-0.1.0.tgz`, then restart that profile. Removing `dsh-beluga-office` disables processing while retaining chats, memory and existing artifact downloads. Neither package is published to the public market yet.

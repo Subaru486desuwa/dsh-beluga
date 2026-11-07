@@ -1,5 +1,5 @@
 import { Context, Service } from '@deepseek-ai/cordis'
-import type { OfficeEngine } from 'dsh-personal-chat'
+import type { OfficeEngine } from 'dsh-beluga'
 import { extractOfficeText } from './office.ts'
 import { renderDocument } from './documents.ts'
 export default class PersonalChatOffice extends Service implements OfficeEngine {

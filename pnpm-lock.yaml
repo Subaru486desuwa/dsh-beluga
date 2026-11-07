@@ -63,7 +63,7 @@ importers:
       '@deepseek-ai/cordis':
         specifier: 4.0.5
         version: 4.0.5
-      dsh-personal-chat:
+      dsh-beluga:
         specifier: workspace:*
         version: link:../plugin
 
