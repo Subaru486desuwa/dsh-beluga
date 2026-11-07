@@ -1,10 +1,12 @@
-# Personal Chat: single-plugin first release
+# Personal Chat: base plugin and opt-in Office extension
 
 ## Agreed outcome
 
-Ship one community DeepSeek Harness plugin, installed into the existing Web/Desktop shell. It adds Chat beside unchanged Work. It must not require a modified Harness, an upstream patch, a private fork, a native Work Session, or an embedded third-party website.
+Ship a base community DeepSeek Harness plugin for Chat and Memory, installed into the existing Web/Desktop shell. Office processing is a separate opt-in extension installed only after explicit user consent. It adds Chat beside unchanged Work. It must not require a modified Harness, an upstream patch, a private fork, a native Work Session, or an embedded third-party website.
 
-This is the user's latest architectural decision and supersedes the native-Session WIP. The old three worktrees are frozen, uncommitted recovery material only. The user has requested their official ChatGPT export and explicitly deferred real-data acceptance until it arrives; framework implementation and synthetic acceptance continue now. Release materials cover the npm bundle and GitHub source; installation and compatibility claims require packed-artifact acceptance.
+Deliver independently installable base and Office tarballs with their source; the base must not depend on or auto-install Office. Installation and compatibility claims require packed-artifact acceptance. Real official ChatGPT export validation follows when that separately requested input becomes available.
+
+The base plugin contains Chat and Memory. Office capabilities are a separately downloaded extension, recommended but never preinstalled, automatically installed or enabled by a model request. Only explicit user installation enables Office tools. Removing the extension retains existing conversations, memory and artifact downloads; no default Harness profile is modified.
 
 ## First-release behavior
 
@@ -24,7 +26,7 @@ This is the user's latest architectural decision and supersedes the native-Sessi
 
 ## Implementation approach
 
-The publishable package contains its Host service, browser plugin, generated Remote descriptors and an installable bundle patch. Normal conversations use one plugin-owned durable data model; temporary conversations and attachments remain in memory. The plugin does not create native Work Sessions or modify stock provider instances.
+The base package contains its Host service, browser plugin, generated Remote descriptors and an installable bundle patch. The separate Office package owns XML parsing and document-rendering dependencies and registers its engine only when explicitly installed and enabled. Normal conversations use one plugin-owned durable data model; temporary conversations and attachments remain in memory. The plugin does not create native Work Sessions or modify stock provider instances.
 
 The initial compatibility target is DSH 0.2.1-rc.3. Model/image route support is declared from verified public adapter behavior, not inferred from a model name.
 
