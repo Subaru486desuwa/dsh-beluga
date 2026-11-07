@@ -64,6 +64,38 @@ describe('client delivery recovery', () => {
     expect(model.state.getSnapshot().detail?.live?.text).toBe('Already streamed prefix')
   })
 
+  describe.each([
+    ['pinning', (model: PersonalModel) => model.pin(true), { pinned: true }],
+    ['renaming', (model: PersonalModel) => model.rename('New title'), { title: 'New title' }],
+  ] as const)('%s while a reply finishes', (_name, act, expected) => {
+    const reply = { id: 'reply', role: 'assistant' as const, text: 'Finished reply', time: 3, attachmentIds: [], toolNames: [] }
+    const finished: ConversationDetail = { ...initial, messages: [reply] }
+    function harness() {
+      let deliver!: () => void
+      const ready = new Promise<void>(resolve => { deliver = resolve })
+      const changed = async () => { deliver(); await sleep(5); return { ...initial.conversation, ...expected } }
+      const api = {
+        limits: async () => ({ uploadBytes: 1000, attachmentBytes: 1000, profileBytes: 1000 }),
+        models: async () => [route], list: async () => [initial.conversation], get: async () => initial, memoryState: async () => memory,
+        async *follow(signal: AbortSignal): AsyncIterable<PersonalChange> { await wait(signal) },
+        async *followConversation(_request: unknown, signal: AbortSignal): AsyncIterable<ChatUpdate> {
+          yield { kind: 'snapshot', detail: initial }; await ready
+          yield { kind: 'snapshot', detail: finished }
+          await wait(signal)
+        },
+        setPinned: changed, rename: changed,
+      } as unknown as PersonalChatOperations
+      return new PersonalModel(api)
+    }
+    it('keeps the reply and shows the change', async () => {
+      const model = harness(); models.push(model)
+      await model.start(); await model.open(id)
+      await act(model)
+      const detail = model.state.getSnapshot().detail!
+      expect(detail.messages).toEqual([reply])
+      expect(detail.conversation).toMatchObject(expected)
+    })
+  })
   it('announces a proposed memory as pending rather than saved', async () => {
     const api = { proposeMemory: async () => ({ state: 'pending' }), memoryState: async () => memory } as unknown as PersonalChatOperations
     const model = new PersonalModel(api); models.push(model)

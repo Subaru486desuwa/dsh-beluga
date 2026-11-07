@@ -67,6 +67,29 @@ export interface ArchiveView {
   readonly original: Record<string, JsonValue>
   readonly warnings: readonly string[]
 }
+/** One Office file shown as images: a document's first pages, or the start of one worksheet. */
+export interface OfficePreview {
+  readonly pages: readonly { readonly base64: string; readonly width: number; readonly height: number }[]
+  /** Pages in the document; a worksheet counts its images. */
+  readonly pageCount: number
+  readonly missingFonts: readonly string[]
+  readonly sheets?: readonly string[]
+  readonly sheet?: string
+  readonly range?: string
+  /** The worksheet goes on past the range shown. */
+  readonly clipped?: boolean
+}
+/** A cell as read from a saved workbook. */
+export type SheetCell = string | number | boolean | null
+/** One rectangle of a worksheet, for the model. */
+export interface SheetRange {
+  readonly sheet: string
+  readonly range: string
+  readonly rows: readonly (readonly SheetCell[])[]
+  readonly formulas: Readonly<Record<string, string>>
+  /** What to read next when the request was larger than one answer. */
+  readonly nextRange?: string
+}
 /** A page a reply consulted. */
 export interface WebSource {
   readonly url: string
@@ -213,7 +236,10 @@ export interface AttachmentText {
   readonly pagesRead?: number
 }
 /** All calls use the authenticated owner Remote namespace `personalChat`. */
-export interface UploadLimits { readonly uploadBytes: number; readonly attachmentBytes: number; readonly profileBytes: number }
+export interface UploadLimits { readonly uploadBytes: number; readonly attachmentBytes: number; readonly profileBytes: number
+  /** Whether the Office extension can render files here. */
+  readonly office: boolean
+}
 export interface PersonalChatOperations {
   limits(): Promise<UploadLimits>
   models(): Promise<readonly ModelChoice[]>
@@ -221,6 +247,8 @@ export interface PersonalChatOperations {
   stop(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail>
   removeAttachment(request: { readonly conversationId: ConversationId; readonly attachmentId: string }): Promise<void>
   upload(request: { readonly conversationId: ConversationId; readonly name: string; readonly base64: string }): Promise<ChatAttachment>
+  previewFile(request: { readonly conversationId: ConversationId; readonly attachmentId: string; readonly sheet?: string }): Promise<OfficePreview>
+  exportPdf(request: { readonly conversationId: ConversationId; readonly attachmentId: string }): Promise<{ readonly name: string; readonly base64: string }>
   attachment(request: { readonly conversationId: ConversationId; readonly attachmentId: string; readonly original?: boolean }): Promise<{ readonly name: string; readonly mediaType: string; readonly base64: string }>
   follow(signal: AbortSignal): AsyncIterable<PersonalChange>
   followConversation(request: { readonly conversationId: ConversationId }, signal: AbortSignal): AsyncIterable<ChatUpdate>

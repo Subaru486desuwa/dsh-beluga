@@ -17,8 +17,11 @@ import { AssetRepository } from './assets.ts'
 import { decodeBase64 } from './base64.ts'
 import { ModelBridge } from './model-bridge.ts'
 import type { ModelChoice, ModelRef } from '../shared/models.ts'
-import type { ArchiveRevisionId, ArchiveSelection, BranchId, BranchRequest, CandidateId, CandidateInput, ChatBranch, Conversation, ConversationDetail, ConversationId, ConversationSummary, ImportBatch, ImportBatchId, ImportPreview, ImportPreviewId, ImportResult, ImportUndoResult, Memory, MemoryCandidate, MemoryId, MemoryState, PersonalChatOperations, PersonalProfile, ProfileImportSource, ChatAttachment, ChatUpdate, PersonalChange } from '../shared/types.ts'
+import type { ArchiveRevisionId, ArchiveSelection, BranchId, BranchRequest, CandidateId, CandidateInput, ChatBranch, Conversation, ConversationDetail, ConversationId, ConversationSummary, OfficePreview, UploadLimits, ImportBatch, ImportBatchId, ImportPreview, ImportPreviewId, ImportResult, ImportUndoResult, Memory, MemoryCandidate, MemoryId, MemoryState, PersonalChatOperations, PersonalProfile, ProfileImportSource, ChatAttachment, ChatUpdate, PersonalChange } from '../shared/types.ts'
 export type * from '../shared/types.ts'
+
+/** The kit gives up at 60 s per operation; this also covers the wait for a turn behind it. */
+const RENDER_TIMEOUT_MS = 180000
 export type * from '../shared/models.ts'
 export { Config } from './config.ts'
 
@@ -75,7 +78,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     if (principalOf(this.ctx.invocation) !== undefined) throw new RemoteError('personal-chat/forbidden', 'Personal Chat is restricted to the Host owner', {})
   }
   /** Effective upload limits, without provider configuration or credentials. */
-  @Remote async limits(): Promise<{ readonly uploadBytes: number; readonly attachmentBytes: number; readonly profileBytes: number }> { this.owner(); return { uploadBytes: this.config.maxUploadBytes, attachmentBytes: this.config.maxAttachmentBytes, profileBytes: this.config.maxProfileBytes } }
+  @Remote async limits(): Promise<UploadLimits> { this.owner(); return { office: !!this.ctx.get('personalChatOffice'), uploadBytes: this.config.maxUploadBytes, attachmentBytes: this.config.maxAttachmentBytes, profileBytes: this.config.maxProfileBytes } }
   /** Configured Harness models, plus any explicitly configured inline image models. */
   @Remote async models(): Promise<readonly ModelChoice[]> { this.owner(); return this.bridge.models() }
   /** List plugin histories only. Temporary conversations are never added to history. */
@@ -289,6 +292,19 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       catch (error) { await this.assets.remove(attachment, record.conversation.temporary); throw error }
       return attachment
     })
+  }
+  /** Show an owned Office file as images, for the person to read before downloading it. */
+  @Remote async previewFile(request: { readonly conversationId: ConversationId; readonly attachmentId: string; readonly sheet?: string }): Promise<OfficePreview> {
+    this.owner()
+    const record = this.chats.record(request.conversationId)
+    return this.assets.preview(this.chats.ownedAsset(record, request.attachmentId), record.conversation.temporary, request.sheet, AbortSignal.timeout(RENDER_TIMEOUT_MS))
+  }
+  @Remote async exportPdf(request: { readonly conversationId: ConversationId; readonly attachmentId: string }): Promise<{ readonly name: string; readonly base64: string }> {
+    this.owner()
+    const record = this.chats.record(request.conversationId)
+    const attachment = this.chats.ownedAsset(record, request.attachmentId)
+    const pdf = await this.assets.pdf(attachment, record.conversation.temporary, AbortSignal.timeout(RENDER_TIMEOUT_MS))
+    return { name: attachment.name.replace(/\.[^.]+$/u, '') + '.pdf', base64: Buffer.from(pdf).toString('base64') }
   }
   /** Read an owned attachment for explicit browser preview/download. */
   @Remote async attachment(request: { readonly conversationId: ConversationId; readonly attachmentId: string; readonly original?: boolean }): Promise<{ readonly name: string; readonly mediaType: string; readonly base64: string }> {

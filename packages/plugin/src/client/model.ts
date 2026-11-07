@@ -1,5 +1,5 @@
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { PersonalChatOperations, ConversationSummary, ConversationDetail, ConversationId, BranchId, ArchiveSelection, ImportPreview, ImportBatch, ImportBatchId, MemoryState, Memory, MemorySource, MemoryCandidate, PersonalProfile, ChatUpdate, ChatAttachment } from '../shared/types.ts'
+import type { PersonalChatOperations, UploadLimits, ConversationSummary, ConversationDetail, ConversationId, BranchId, ArchiveSelection, ImportPreview, ImportBatch, ImportBatchId, MemoryState, Memory, MemorySource, MemoryCandidate, PersonalProfile, ChatUpdate, ChatAttachment } from '../shared/types.ts'
 import type { ModelChoice, ModelRef } from '../shared/models.ts'
 import type { PersonalChatKey } from './locales.ts'
 
@@ -17,7 +17,7 @@ export interface PersonalState {
   readonly models: readonly ModelChoice[]
   readonly modelsLoading: boolean
   readonly web: boolean
-  readonly limits?: { uploadBytes: number; attachmentBytes: number; profileBytes: number }
+  readonly limits?: UploadLimits
   readonly selectedModel: ModelRef | undefined
   readonly notice: { readonly seq: number; readonly key: PersonalChatKey; readonly count?: number; readonly undo?: Memory; readonly detail?: string } | undefined
 }
@@ -154,6 +154,11 @@ export class PersonalModel {
       if (this.state.getSnapshot().detail?.conversation.id === id) { this.conversationWatch?.abort(); this.watchedId = undefined; this.patch({ detail: undefined }) }
     }).catch(() => { if (!this.disposed) this.notice('failed') })
   }
+  /** Apply a settled field to whatever is on screen now: replies and other chats may have arrived during the request. */
+  private amend(id: ConversationId, change: Partial<ConversationDetail['conversation']>): void {
+    const latest = this.state.getSnapshot().detail
+    if (latest?.conversation.id === id) this.patch({ detail: { ...latest, conversation: { ...latest.conversation, ...change } } })
+  }
   private detail(): ConversationDetail { const detail = this.state.getSnapshot().detail; if (!detail) throw new Error('No chat selected'); return detail }
   private model(): ModelRef { const model = this.state.getSnapshot().selectedModel; if (!model) throw new Error('Configure and select a model first'); return { provider: model.provider, model: model.model, ...(model.inline ? { inline: true } : {}) } }
   setWeb(web: boolean): void { this.patch({ web }) }
@@ -170,10 +175,12 @@ export class PersonalModel {
   async continueArchive(text: string): Promise<void> { await this.send(text, []) }
   async removeAttachment(id: string): Promise<void> { await this.api.removeAttachment({ conversationId: this.detail().conversation.id, attachmentId: id }) }
   async upload(fileName: string, base64: string): Promise<ChatAttachment> { return this.api.upload({ conversationId: this.detail().conversation.id, name: fileName, base64 }) }
+  async previewFile(id: string, sheet?: string) { return this.api.previewFile({ conversationId: this.detail().conversation.id, attachmentId: id, ...(sheet === undefined ? {} : { sheet }) }) }
+  async exportPdf(id: string) { return this.api.exportPdf({ conversationId: this.detail().conversation.id, attachmentId: id }) }
   async attachment(id: string, original?: boolean) { return this.api.attachment({ conversationId: this.detail().conversation.id, attachmentId: id, ...(original ? { original: true } : {}) }) }
-  async rename(title: string): Promise<void> { const current = this.detail(); const conversation = await this.api.rename({ conversationId: current.conversation.id, title }); this.patch({ detail: { ...current, conversation } }); await this.refresh() }
+  async rename(title: string): Promise<void> { const { id } = this.detail().conversation; await this.api.rename({ conversationId: id, title }); this.amend(id, { title }); await this.refresh() }
   async archive(archived: boolean): Promise<void> { const current = this.detail(); await this.api.setArchived({ conversationId: current.conversation.id, archived }); this.select(await this.api.get({ conversationId: current.conversation.id })); await this.refresh() }
-  async pin(pinned: boolean): Promise<void> { const current = this.detail(); const conversation = await this.api.setPinned({ conversationId: current.conversation.id, pinned }); this.patch({ detail: { ...current, conversation } }); await this.refresh() }
+  async pin(pinned: boolean): Promise<void> { const { id } = this.detail().conversation; await this.api.setPinned({ conversationId: id, pinned }); this.amend(id, { pinned }); await this.refresh() }
   async delete(): Promise<void> { const id = this.detail().conversation.id; await this.api.deleteConversation({ conversationId: id }); this.conversationWatch?.abort(); this.watchedId = undefined; this.patch({ detail: undefined }); await this.refresh() }
   async selectBranch(branchId: BranchId): Promise<void> { this.pendingSend = undefined; this.pendingBranch = undefined; this.select(await this.api.selectBranch({ conversationId: this.detail().conversation.id, branchId })) }
   async selectArchive(selection: { revisionId: ArchiveSelection['revisionId']; nodeId?: string }): Promise<void> { this.pendingSend = undefined; this.pendingBranch = undefined; this.select(await this.api.selectArchive({ conversationId: this.detail().conversation.id, selection })) }

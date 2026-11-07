@@ -34,15 +34,18 @@
   },
   "dependencies": {
     "docx": "9.15.2",
+    "exceljs": "4.4.0",
     "fast-xml-parser": "5.12.0",
     "fflate": "0.8.2"
   },
   "peerDependencies": {
-    "dsh-beluga": "0.1.0",
-    "@deepseek-ai/cordis": "4.0.5"
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/libreoffice-kit": "0.1.5",
+    "dsh-beluga": "0.1.0"
   },
   "devDependencies": {
-    "dsh-beluga": "workspace:*",
-    "@deepseek-ai/cordis": "4.0.5"
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/libreoffice-kit": "0.1.5",
+    "dsh-beluga": "workspace:*"
   }
 }

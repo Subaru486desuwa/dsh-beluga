@@ -35,6 +35,7 @@ export function exportName(title: string): string {
   return (title.replace(/[\\/:*?"<>|\p{Cc}]/gu, '_').trim().slice(0, 120) || 'chat') + '.md'
 }
 
+export function decodeBase64(base64: string): Uint8Array<ArrayBuffer> { return Uint8Array.from(atob(base64), char => char.charCodeAt(0)) }
 /** Hand the browser a file to save. */
 export function saveFile(name: string, data: Blob): void {
   const url = URL.createObjectURL(data)

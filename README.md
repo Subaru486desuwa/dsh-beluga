@@ -98,6 +98,13 @@ Use a distinct `dataDir` for each concurrently running profile; the writer lease
 
 ## Office candidate
 
-After explicit installation of the Office extension, DOCX, XLSX and PPTX support structured source reading. Word generation creates editable headings, paragraphs and tables; subsequent block edits preserve previous artifact versions. Editing uploaded templates, Excel/PPT authoring and in-chat Office previews are not yet available.
+After explicit installation of the Office extension:
 
-Install the Office tarball into the existing Chat profile only after the user agrees: `dsh plugin --profile web add ./dsh-beluga-office-0.1.0.tgz`, then restart that profile. Removing `dsh-beluga-office` disables processing while retaining chats, memory and existing artifact downloads. Neither package is published to the public market yet.
+- **Reading:** DOCX, XLSX and PPTX as source records, and any range of a worksheet, with formulas listed apart from their saved results.
+- **Preview and PDF:** Office files render on this machine with the LibreOffice engine that ships with Harness. The layout can differ slightly from Word or Excel.
+- **Word:** create documents with lists, tables, charts, a table of contents, page numbers and Chinese fonts; change paragraphs of any DOCX, uploads included, with optional tracked changes; fill `{{name}}` templates.
+- **Excel:** create workbooks; change cells of any XLSX, uploads included, leaving everything else as it was. Formulas are recalculated and errors such as `#REF!` come back to the model.
+
+Every change makes a new version and keeps the original. Chat does not run code, and formulas that fetch from the network or start programs are refused. Temporary Chat keeps files in memory, so it has no preview, PDF export, recalculation or layout check. PPT authoring is not available yet.
+
+Install the Office tarball into the existing Chat profile only after the user agrees: `dsh plugin --profile web add ./dsh-beluga-office-0.1.0.tgz`, then restart that profile. It uses the engine already installed with Harness, so nothing large is downloaded. Removing `dsh-beluga-office` disables processing while retaining chats, memory and existing artifact downloads. Neither package is published to the public market yet.

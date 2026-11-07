@@ -4,13 +4,17 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatAttachment, ChatMessageView } from '../shared/types.ts'
 import type { PersonalState } from './model.ts'
 import type { PersonalCommands } from './contract.ts'
-import { saveFile } from './export.ts'
+import { decodeBase64, saveFile } from './export.ts'
+import { FilePreview } from './Preview.tsx'
 import { speakable, withoutRemoteImages } from './markdown.ts'
 import css from './PersonalChat.module.css'
 
-function FileView({ file, commands, t }: { file: ChatAttachment; commands: PersonalCommands; t: TranslateNS<'personalChat'> }) {
+function FileView({ file, renderable, commands, t }: { file: ChatAttachment; renderable: boolean; commands: PersonalCommands; t: TranslateNS<'personalChat'> }) {
   const [image, setImage] = useState<string | undefined>()
   const [failed, setFailed] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const office = renderable && /\.(docx|xlsx|pptx)$/iu.test(file.name)
   const currentCommands = useRef(commands)
   currentCommands.current = commands
   useEffect(() => {
@@ -20,11 +24,16 @@ function FileView({ file, commands, t }: { file: ChatAttachment; commands: Perso
   }, [file.id, file.image])
   const download = async () => {
     const result = await commands.attachment(file.id, true)
-    const raw = atob(result.base64)
-    const data = Uint8Array.from(raw, char => char.charCodeAt(0))
-    saveFile(result.name, new Blob([data], { type: result.mediaType }))
+    saveFile(result.name, new Blob([decodeBase64(result.base64)], { type: result.mediaType }))
   }
-  return <div className={css.fileCard}>{image && <img className={css.ownImage} src={image} alt={file.name} />}<span>{file.artifact ? t('artifactVersion', { version: file.artifact.version }) : t('inputFile')} · {file.name} · {Math.ceil(file.bytes / 1024)} KB</span><Button size="sm" onClick={() => { void download().catch(() => setFailed(true)) }}>{t('download')}</Button>{file.artifact && <small>{file.artifact.summary}</small>}{failed && <span role="alert">{t('failed')}</span>}</div>
+  const exportPdf = async () => {
+    setExporting(true)
+    try {
+      const result = await commands.exportPdf(file.id)
+      saveFile(result.name, new Blob([decodeBase64(result.base64)], { type: 'application/pdf' }))
+    } catch { setFailed(true) } finally { setExporting(false) }
+  }
+  return <div className={css.fileCard}>{image && <img className={css.ownImage} src={image} alt={file.name} />}<span>{file.artifact ? t('artifactVersion', { version: file.artifact.version }) : t('inputFile')} · {file.name} · {Math.ceil(file.bytes / 1024)} KB</span><Button size="sm" onClick={() => { void download().catch(() => setFailed(true)) }}>{t('download')}</Button>{office && <Button size="sm" onClick={() => setPreviewing(true)}>{t('previewFile')}</Button>}{office && <Button size="sm" disabled={exporting} onClick={() => { void exportPdf() }}>{t(exporting ? 'loading' : 'exportPdf')}</Button>}{previewing && <FilePreview file={file} commands={commands} onClose={() => setPreviewing(false)} t={t} />}{file.artifact && <small>{file.artifact.summary}</small>}{failed && <span role="alert">{t('failed')}</span>}</div>
 }
 /** A network voice would send the reply to the browser vendor, so only voices on this device count. */
 function localVoice(text: string): SpeechSynthesisVoice | undefined {
@@ -66,6 +75,7 @@ export function ChatMessages({ state, commands, t }: { state: PersonalState; com
   const nearBottom = useRef(true)
   const [edit, setEdit] = useState<{ message: ChatMessageView; text: string } | undefined>()
   const [copied, setCopied] = useState<string | undefined>()
+  const renderable = state.limits?.office === true && !detail.conversation.temporary
   const labels = useMemo(() => ({ code: { copyLabel: t('copy'), copiedLabel: t('copied') }, footnotes: t('footnotes') }), [t])
   useEffect(() => {
     if (nearBottom.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight
@@ -83,7 +93,7 @@ export function ChatMessages({ state, commands, t }: { state: PersonalState; com
             {message.toolNames.length > 0 && <div className={css.muted}>{message.toolNames.join(' · ')}</div>}
             {message.sources && <nav className={css.sources} aria-label={t('sources')}>{message.sources.map(source => <a key={source.url} href={source.url} target="_blank" rel="noreferrer noopener">{source.title || new URL(source.url).hostname}</a>)}</nav>}
           </>}
-          {message.attachmentIds.map(id => { const file = detail.attachments.find(item => item.id === id); return file ? <FileView key={id} file={file} commands={commands} t={t} /> : null })}
+          {message.attachmentIds.map(id => { const file = detail.attachments.find(item => item.id === id); return file ? <FileView key={id} file={file} renderable={renderable} commands={commands} t={t} /> : null })}
           {message.role !== 'tool' && <div className={css.messageActions}>
             <Button size="sm" onClick={() => { void copy(message) }}>{t(copied === message.id ? 'copied' : 'copy')}</Button>
             {message.role === 'user' ? <Button size="sm" disabled={state.busy || !!detail.live} onClick={() => setEdit({ message, text: message.text })}>{t('edit')}</Button> : <Button size="sm" disabled={state.busy || !!detail.live} onClick={() => { void commands.branch(message.id, 'regenerate') }}>{t('regenerate')}</Button>}

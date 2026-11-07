@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { DocumentInput } from './documents.ts'
 import type { Message, MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type * as T from '../shared/types.ts'
@@ -25,9 +24,8 @@ const message: z.ZodType<Message> = z.discriminatedUnion('role', [
   z.object({ id: messageId, role: z.literal('tool'), content: z.array(text), source: z.object({ kind: z.literal('tool'), callId: z.string().transform(brandString<ToolCallId>) }), toolCallId: z.string().transform(brandString<ToolCallId>), isError: z.boolean().optional() }),
 ])
 export interface ChatEntry { readonly id: string; readonly message: Message; readonly time: number; readonly attachmentIds: readonly string[]; readonly userText?: string; readonly admissionModel?: ModelRef; readonly admissionWeb?: boolean; readonly originBranchId?: T.BranchId; readonly sources?: readonly T.WebSource[] }
-/** One conversation as the service uses it. Entries and documents are stored as their own append-only rows. */
+/** One conversation as the service uses it. Entries are stored as their own append-only rows. */
 export interface ConversationRecord {
-  readonly documents?: Readonly<Record<string, DocumentInput>>
   readonly conversation: T.Conversation
   readonly entries: readonly ChatEntry[]
   readonly attachments: readonly T.ChatAttachment[]
@@ -38,7 +36,7 @@ export interface ConversationRecord {
   /** How many of the oldest branch messages the latest request left out. */
   readonly omittedMessages?: number
 }
-export type ConversationHead = Omit<ConversationRecord, 'entries' | 'documents'>
+export type ConversationHead = Omit<ConversationRecord, 'entries'>
 const conversation: z.ZodType<T.Conversation> = z.object({
   id: cid, title: z.string(), temporary: z.literal(false), archived: z.boolean(), createdAt: z.number(), updatedAt: z.number(),
   branches: z.array(z.object({ id: bid, messageIds: z.array(z.string()), context: z.string().optional(), operation: z.enum(['edit', 'regenerate', 'fork']).optional(), parentBranchId: bid.optional(), sourceMessageId: z.string().optional(), archive: selection.optional(), snapshot: z.object({ omittedNodes: z.number(), includedNodes: z.number(), bytes: z.number() }).optional(), createdAt: z.number() })),

@@ -3,7 +3,6 @@ import { Feed } from './feed.ts'
 import { Lru } from './lru.ts'
 import { textOf, type ConversationRecord } from './records.ts'
 import type { Config } from './config.ts'
-import type { DocumentInput } from './documents.ts'
 import type { PersonalDomain } from './storage.ts'
 import type { ModelRef } from '../shared/models.ts'
 import type { ArchiveRevisionId, ArchiveSelection, BranchId, ChatAttachment, ChatUpdate, Conversation, ConversationDetail, ConversationId, LiveTurn, PersonalChange, WebSource } from '../shared/types.ts'
@@ -11,7 +10,7 @@ import type { ArchiveRevisionId, ArchiveSelection, BranchId, ChatAttachment, Cha
 /** Bounds the parsed imports held in memory, counted in nodes. */
 const CACHED_ARCHIVE_NODES = 20000
 export interface RunningTurn {
-  pendingDocument?: { callId: string; id: string; name: string; bytes: Uint8Array; source: DocumentInput; artifact: NonNullable<ChatAttachment["artifact"]> }
+  pendingDocument?: { callId: string; id: string; name: string; bytes: Uint8Array; artifact: NonNullable<ChatAttachment["artifact"]> }
   readonly id: string
   readonly branchId: BranchId
   readonly userId: string

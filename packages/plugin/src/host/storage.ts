@@ -5,16 +5,18 @@ import { join } from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
 import lockfile from 'proper-lockfile'
 import { PersonalChatError } from './archive.ts'
-import { documentInput } from './documents.ts'
 import { Lru } from './lru.ts'
 import { normalized } from './memory.ts'
 import { pacing } from './pacing.ts'
 import { archiveRecord, chatEntry, consistent, conversationHead, importBatch, memoryLedger, textOf, type ArchiveRecord, type ConversationRecord, type MemoryLedger } from './records.ts'
 import type * as T from '../shared/types.ts'
 
-const VERSION = 3
+const VERSION = 4
 /** Statements that lift a database from the version they are keyed by to the next one. */
-const UPGRADES: Readonly<Record<number, string>> = { 2: 'ALTER TABLE personal_chat_conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;' }
+const UPGRADES: Readonly<Record<number, string>> = {
+  2: 'ALTER TABLE personal_chat_conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;',
+  3: 'DROP TABLE personal_chat_documents;',
+}
 /** Bounds the assembled conversations held in memory, counted in entries. */
 const CACHED_ENTRIES = 20000
 /**
@@ -32,8 +34,6 @@ INSERT INTO personal_chat_meta(version) VALUES(${VERSION});
 CREATE TABLE personal_chat_records(kind TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,id));
 CREATE TABLE personal_chat_conversations(id TEXT PRIMARY KEY, title TEXT NOT NULL, title_key TEXT NOT NULL, updated_at INTEGER NOT NULL, archived INTEGER NOT NULL, listed INTEGER NOT NULL, pending INTEGER NOT NULL, value TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE personal_chat_entries(conversation_id TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(conversation_id,seq));
-CREATE TABLE personal_chat_documents(id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, value TEXT NOT NULL);
-CREATE INDEX personal_chat_document_owner ON personal_chat_documents(conversation_id);
 CREATE TABLE personal_chat_archives(id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, conversation_id TEXT NOT NULL, source_id TEXT NOT NULL, value TEXT NOT NULL);
 CREATE INDEX personal_chat_archive_batch ON personal_chat_archives(batch_id);
 CREATE INDEX personal_chat_archive_owner ON personal_chat_archives(conversation_id);
@@ -128,30 +128,27 @@ export class PersonalStore {
     const row = this.sql('SELECT value FROM personal_chat_conversations WHERE id=?').get(id)
     if (!row) return undefined
     const entries = this.sql('SELECT value FROM personal_chat_entries WHERE conversation_id=? ORDER BY seq').all(id).map(item => decode(chatEntry, item.value))
-    const documents = this.sql('SELECT id,value FROM personal_chat_documents WHERE conversation_id=?').all(id).map(item => [String(item.id), decode(documentInput, item.value)])
-    const record: ConversationRecord = { ...decode(conversationHead, row.value), entries, ...(documents.length ? { documents: Object.fromEntries(documents) } : {}) }
+    const record: ConversationRecord = { ...decode(conversationHead, row.value), entries }
     if (record.conversation.id !== id || !consistent(record)) throw new PersonalChatError('invalid-storage', 'A stored conversation has inconsistent identities or references')
     this.records.set(id, record)
     return record
   }
   /**
-   * Store one conversation by appending its new entries and documents; earlier rows are
+   * Store one conversation by appending its new entries; earlier rows are
    * never rewritten, so the cost of a save does not grow with the length of the history.
    * @param value - the full record; its entries must extend the stored ones.
    * @throws PersonalChatError when the write would lose stored history.
    */
   saveConversation(value: ConversationRecord): void {
     this.available()
-    const { entries, documents, ...rest } = value
+    const { entries, ...rest } = value
     const id = rest.conversation.id
     const stored = this.conversation(id)
     const known = stored?.entries ?? []
     if (entries.length < known.length || (known.length > 0 && entries[known.length - 1]!.id !== known.at(-1)!.id)) throw new PersonalChatError('invalid-storage', 'This write would lose stored history')
     const added = entries.slice(known.length).map(entry => chatEntry.parse(entry))
-    const addedDocuments = Object.entries(documents ?? {}).filter(([key]) => !stored?.documents?.[key]).map(([key, document]) => [key, documentInput.parse(document)] as const)
-    const allDocuments = { ...stored?.documents, ...Object.fromEntries(addedDocuments) }
     const head = conversationHead.parse(rest)
-    const record: ConversationRecord = { ...head, entries: [...known, ...added], ...(addedDocuments.length || stored?.documents ? { documents: allDocuments } : {}) }
+    const record: ConversationRecord = { ...head, entries: [...known, ...added] }
     if (!consistent(record)) throw new PersonalChatError('invalid-storage', 'Conversation identities or owned references are inconsistent')
     const { title, updatedAt, archived, pinned, branches, archiveRevisions } = head.conversation
     this.atomic(() => {
@@ -162,7 +159,6 @@ export class PersonalStore {
         // Tool output is not conversation: it can quote web pages, or a memory forgotten later.
         if (entry.message.role !== 'tool') this.index(id, null, normalized(entry.userText ?? textOf(entry.message)))
       }
-      for (const [key, document] of addedDocuments) this.sql('INSERT INTO personal_chat_documents(id,conversation_id,value) VALUES(?,?,?)').run(key, id, JSON.stringify(document))
     })
     this.records.set(id, record)
   }
@@ -170,7 +166,7 @@ export class PersonalStore {
   removeConversation(id: T.ConversationId): void {
     this.available()
     this.atomic(() => {
-      for (const table of ['entries', 'documents', 'archives', 'search_text']) this.sql(`DELETE FROM personal_chat_${table} WHERE conversation_id=?`).run(id)
+      for (const table of ['entries', 'archives', 'search_text']) this.sql(`DELETE FROM personal_chat_${table} WHERE conversation_id=?`).run(id)
       this.sql('DELETE FROM personal_chat_conversations WHERE id=?').run(id)
     })
     this.records.delete(id)

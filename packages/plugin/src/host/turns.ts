@@ -5,9 +5,11 @@ import { BlockAssembler, createAssistantMessage, createToolResultMessage, create
 import type { Context } from '@deepseek-ai/cordis'
 import { PersonalChatError } from './archive.ts'
 import { contextWindow } from './context-window.ts'
-import { documentBlock, reviseDocument, validateDocument, type DocumentInput } from './documents.ts'
+import { documentEdit, templateFill, validateDocument } from './documents.ts'
+import { officeFormat, type OfficeEngine } from './office-contract.ts'
 import { normalized } from './memory.ts'
 import { boundedResult, toolSchemas } from './tools.ts'
+import { validateWorkbook, workbookEdit } from './workbooks.ts'
 import type { AssetRepository } from './assets.ts'
 import type { Config } from './config.ts'
 import type { Conversations, RunningTurn } from './conversations.ts'
@@ -19,6 +21,14 @@ import type { ChatAttachment, ChatBranch, ConversationId, MemoryId, WebSource } 
 
 /** Bounds the list of pages shown under one reply. */
 const MAX_SOURCES = 20
+const MAX_REPORTED_ISSUES = 5
+const fileName = (title: string, fallback: string): string => title.replace(/[\/\\:\u0000-\u001f]/gu, '_').slice(0, 120) || fallback
+/** What a model needs to correct its next call. Unexpected errors stay opaque: their text can name internals. */
+function toolFailure(error: unknown): { readonly error: string; readonly message?: string } {
+  if (error instanceof PersonalChatError) return { error: error.reason, message: error.message }
+  if (error instanceof z.ZodError) return { error: 'invalid-tool-arguments', message: error.issues.slice(0, MAX_REPORTED_ISSUES).map(issue => issue.path.join('.') + ': ' + issue.message).join('; ') }
+  return { error: 'tool-failed' }
+}
 function safeCode(code: string): string { return /^[A-Z0-9_-]{1,64}$/u.test(code) ? code : 'MODEL_ERROR' }
 
 /** Runs one response: model steps, tool calls, and the durable record of each. */
@@ -62,44 +72,50 @@ export class Turns {
     let raw: unknown
     try { raw = JSON.parse(call.arguments) } catch { throw new PersonalChatError('invalid-tool-arguments', 'Tool arguments must be valid JSON') }
     switch (call.name) {
-      case 'create_document':
-      case 'inspect_document':
-      case 'revise_document': {
-        const office = this.ctx.get('personalChatOffice')
-        if (!office) throw new PersonalChatError('office-not-installed', 'Install and enable the optional Office extension explicitly first')
-        let source: DocumentInput
-        let parent: ChatAttachment | undefined
-        let summary = 'Created document'
-        if (call.name === 'create_document') source = validateDocument(raw)
-        else {
-          const args = call.name === 'inspect_document'
-            ? { ...z.object({ attachmentId: z.string().uuid() }).strict().parse(raw), changes: undefined, summary: undefined }
-            : z.object({ attachmentId: z.string().uuid(), summary: z.string().trim().min(1).max(500), changes: z.array(z.object({ index: z.number().int().min(0), block: documentBlock }).strict()).min(1).max(100) }).strict().parse(raw)
-          const branch = record.conversation.branches.find(item => item.id === turn.branchId)!
-          if (!record.entries.some(entry => branch.messageIds.includes(entry.id) && entry.attachmentIds.includes(args.attachmentId))) throw new PersonalChatError('attachment-forbidden', 'The document is not attached to this branch')
-          parent = this.chats.ownedAsset(record, args.attachmentId)
-          const original = record.documents?.[parent.id]
-          if (!original) throw new PersonalChatError('document-source', 'Only plugin-generated documents support structured editing')
-          if (!args.changes) return { attachmentId: parent.id, artifact: parent.artifact, ...original }
-          source = reviseDocument(original, args.changes)
-          summary = args.summary
-        }
-        if (record.attachments.length >= 128) throw new PersonalChatError('attachment-limit', 'This chat already owns 128 attachments')
-        const bytes = await office.renderDocument(source, signal)
-        if (bytes.length > this.config.maxAttachmentBytes) throw new PersonalChatError('attachment-limit', 'Generated document exceeds the file limit')
-        const artifactId = randomUUID()
-        const artifact = { rootId: parent?.artifact?.rootId ?? artifactId, ...(parent ? { parentId: parent.id } : {}), version: (parent?.artifact?.version ?? 0) + 1, summary }
-        const name = (source.title.replace(/[\/\\:\u0000-\u001f]/gu, '_').slice(0, 120) || 'document') + '.docx'
-        if (!this.ctx.get('personalChatOffice')) throw new PersonalChatError('office-unavailable', 'Office extension was disabled')
-        turn.pendingDocument = { callId: call.id, id: artifactId, name, bytes, source, artifact }
-        return { attachmentId: artifactId, name, artifact, editable: true, preview: 'not-rendered' }
+      case 'create_document': {
+        const office = this.officeEngine()
+        const source = validateDocument(raw)
+        const { bytes, warnings } = await office.renderDocument(source, signal)
+        const name = fileName(source.title, 'document') + '.docx'
+        return { ...this.stage(record, turn, call.id, name, bytes, undefined, 'Created document'), check: await office.checkDocument(bytes, name, !record.conversation.temporary, signal), ...(warnings.length ? { warnings } : {}) }
+      }
+      case 'edit_document': {
+        const office = this.officeEngine()
+        const args = documentEdit.parse(raw)
+        const file = this.officeFile(record, turn, args.attachmentId, 'docx')
+        const bytes = office.editDocument(await this.assets.read(file, record.conversation.temporary), args.changes, args.track ?? false, this.config.maxAttachmentBytes, signal)
+        return { ...this.stage(record, turn, call.id, file.name, bytes, file, args.summary), check: await office.checkDocument(bytes, file.name, !record.conversation.temporary, signal) }
+      }
+      case 'fill_template': {
+        const office = this.officeEngine()
+        const args = templateFill.parse(raw)
+        const file = this.officeFile(record, turn, args.attachmentId, 'docx')
+        const { bytes, unfilled } = await office.fillTemplate(await this.assets.read(file, record.conversation.temporary), args.values, this.config.maxAttachmentBytes, signal)
+        return { ...this.stage(record, turn, call.id, file.name, bytes, file, args.summary), unfilled, check: await office.checkDocument(bytes, file.name, !record.conversation.temporary, signal) }
+      }
+      case 'create_workbook': {
+        const office = this.officeEngine()
+        const source = validateWorkbook(raw)
+        const { bytes, check } = await office.settleWorkbook(await office.createWorkbook(source, signal), this.config.maxAttachmentBytes, !record.conversation.temporary, signal)
+        return { ...this.stage(record, turn, call.id, fileName(source.title, 'workbook') + '.xlsx', bytes, undefined, 'Created workbook'), check }
+      }
+      case 'edit_workbook': {
+        const office = this.officeEngine()
+        const args = workbookEdit.parse(raw)
+        const file = this.officeFile(record, turn, args.attachmentId, 'xlsx')
+        const edited = office.editWorkbook(await this.assets.read(file, record.conversation.temporary), args.changes, this.config.maxAttachmentBytes, signal)
+        const { bytes, check } = await office.settleWorkbook(edited, this.config.maxAttachmentBytes, !record.conversation.temporary, signal)
+        return { ...this.stage(record, turn, call.id, file.name, bytes, file, args.summary), check }
+      }
+      case 'read_sheet': {
+        const office = this.officeEngine()
+        const args = z.object({ attachmentId: z.string(), sheet: z.string().optional(), range: z.string().optional() }).strict().parse(raw)
+        const file = this.officeFile(record, turn, args.attachmentId, 'xlsx')
+        return office.readSheet(await this.assets.read(file, record.conversation.temporary), { ...(args.sheet === undefined ? {} : { sheet: args.sheet }), ...(args.range === undefined ? {} : { range: args.range }) }, this.config.maxAttachmentBytes, this.config.maxAttachmentTextBytes, signal)
       }
       case 'read_attachment': {
         const args = z.object({ attachmentId: z.string(), offset: z.number().int().min(0).optional() }).strict().parse(raw)
-        const branch = record.conversation.branches.find(item => item.id === turn.branchId)!
-        const committed = record.entries.filter(entry => branch.messageIds.includes(entry.id)).some(entry => entry.attachmentIds.includes(args.attachmentId))
-        if (!committed) throw new PersonalChatError('attachment-forbidden', 'The file has not been attached to this branch')
-        return this.assets.text(this.chats.ownedAsset(record, args.attachmentId), record.conversation.temporary, args.offset ?? 0, signal)
+        return this.assets.text(this.attached(record, turn, args.attachmentId), record.conversation.temporary, args.offset ?? 0, signal)
       }
       case 'web_search': {
         if (!turn.web) throw new PersonalChatError('tool-forbidden', 'Web access is disabled for this request')
@@ -140,6 +156,33 @@ export class Turns {
       default: throw new PersonalChatError('tool-forbidden', 'This tool is not available in Personal Chat')
     }
   }
+  /** A file sent on the turn's branch; other chats' and other branches' files stay out of reach. */
+  private attached(record: ConversationRecord, turn: RunningTurn, id: string): ChatAttachment {
+    const branch = record.conversation.branches.find(item => item.id === turn.branchId)!
+    const committed = record.entries.filter(entry => branch.messageIds.includes(entry.id)).some(entry => entry.attachmentIds.includes(id))
+    if (!committed) throw new PersonalChatError('attachment-forbidden', 'The file has not been attached to this branch')
+    return this.chats.ownedAsset(record, id)
+  }
+  private officeEngine(): OfficeEngine {
+    const office = this.ctx.get('personalChatOffice')
+    if (!office) throw new PersonalChatError('office-not-installed', 'Install and enable the optional Office extension explicitly first')
+    return office
+  }
+  private officeFile(record: ConversationRecord, turn: RunningTurn, id: string, format: 'docx' | 'xlsx'): ChatAttachment {
+    const file = this.attached(record, turn, id)
+    if (officeFormat(file.name) !== format) throw new PersonalChatError('attachment-format', 'This tool works on ' + format.toUpperCase() + ' files')
+    return file
+  }
+  /** Hold a finished file until its tool result is stored, so the two reach the chat together. An uploaded parent counts as version 1. */
+  private stage(record: ConversationRecord, turn: RunningTurn, callId: string, name: string, bytes: Uint8Array, parent: ChatAttachment | undefined, summary: string) {
+    if (record.attachments.length >= 128) throw new PersonalChatError('attachment-limit', 'This chat already owns 128 attachments')
+    if (bytes.length > this.config.maxAttachmentBytes) throw new PersonalChatError('attachment-limit', 'The generated file exceeds the file limit')
+    if (!this.ctx.get('personalChatOffice')) throw new PersonalChatError('office-unavailable', 'Office extension was disabled')
+    const id = randomUUID()
+    const artifact = { rootId: parent?.artifact?.rootId ?? parent?.id ?? id, ...(parent ? { parentId: parent.id } : {}), version: (parent?.artifact?.version ?? (parent ? 1 : 0)) + 1, summary }
+    turn.pendingDocument = { callId, id, name, bytes, artifact }
+    return { attachmentId: id, name, artifact }
+  }
   /** Note pages for the list under the reply; only web addresses can become links there. */
   private cite(turn: RunningTurn, sources: readonly WebSource[]): void {
     for (const { url, title } of sources) {
@@ -166,7 +209,7 @@ export class Turns {
           if (this.chats.deleting.has(id)) throw new PersonalChatError('not-found', 'Chat is being deleted')
         }
         const next = this.withMessage(record, turn, message, attachment ? [attachment.id] : [])
-        await this.chats.saveRecord(attachment && pending ? { ...next, attachments: [...record.attachments, attachment], documents: { ...record.documents, [attachment.id]: pending.source } } : next)
+        await this.chats.saveRecord(attachment ? { ...next, attachments: [...record.attachments, attachment] } : next)
       } catch (error) {
         if (attachment) await this.assets.remove(attachment, record.conversation.temporary)
         throw error
@@ -256,7 +299,7 @@ export class Turns {
           let result: unknown
           let isError = false
           try { result = await this.executeTool(id, turn, call) }
-          catch (error) { isError = true; result = { error: turn.controller.signal.aborted ? 'stopped' : error instanceof PersonalChatError ? error.reason : 'tool-failed' } }
+          catch (error) { isError = true; result = turn.controller.signal.aborted ? { error: 'stopped' } : toolFailure(error) }
           await this.append(id, turn, createToolResultMessage({ callId: call.id, isError, content: [{ type: 'text', text: boundedResult(result, this.config.maxAttachmentTextBytes) }] }))
         }
         if (step + 1 === this.config.maxToolSteps) outcome = 'tool-limit'

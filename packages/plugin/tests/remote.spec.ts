@@ -3,7 +3,7 @@ import remote from '../lib/typert.remote-client.js'
 
 describe('published Remote contract', () => {
   it('exposes streaming methods and strict request validation', () => {
-    expect(Object.keys(remote.methods)).toHaveLength(31)
+    expect(Object.keys(remote.methods)).toHaveLength(33)
     expect(remote.methods['personalChat/follow'].mode).toBe('stream')
     expect(remote.methods['personalChat/followConversation'].mode).toBe('stream')
     const input = remote.methods['personalChat/create'].input({ strict: true }).create()

@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import type { ChatAttachment, ConversationId, AttachmentText } from '../shared/types.ts'
+import type { ChatAttachment, ConversationId, AttachmentText, OfficePreview } from '../shared/types.ts'
 import { PersonalChatError } from './archive.ts'
 import { extractPdfText } from './pdf.ts'
 import { officeFormat, officeMediaTypes, type OfficeEngine } from './office-contract.ts'
@@ -55,6 +55,24 @@ export class AssetRepository {
     const data = await sharp(source, { limitInputPixels: 16_777_216, animated: false }).rotate().resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true }).removeAlpha().toColourspace('srgb').jpeg({ quality: 90 }).toBuffer()
     signal.throwIfAborted()
     return { mediaType: 'image/jpeg', base64: data.toString('base64') }
+  }
+  /** The engine for a saved Office file. Temporary Chat stays in memory, and rendering needs files on disk. */
+  private renderer(attachment: ChatAttachment, temporary: boolean): OfficeEngine {
+    if (temporary) throw new PersonalChatError('temporary-operation', 'Temporary Chat keeps files in memory, so it has no preview or PDF export')
+    const office = this.office()
+    if (!office) throw new PersonalChatError('office-not-installed', 'Install and enable the optional Office extension explicitly first')
+    if (!officeFormat(attachment.name)) throw new PersonalChatError('attachment-format', 'Only DOCX, XLSX and PPTX files can be rendered')
+    return office
+  }
+  async preview(attachment: ChatAttachment, temporary: boolean, sheet: string | undefined, signal: AbortSignal): Promise<OfficePreview> {
+    const office = this.renderer(attachment, temporary)
+    return office.previewFile(await this.read(attachment, false), attachment.name, sheet, this.config.maxAttachmentBytes, signal)
+  }
+  async pdf(attachment: ChatAttachment, temporary: boolean, signal: AbortSignal): Promise<Uint8Array> {
+    const office = this.renderer(attachment, temporary)
+    const pdf = await office.exportPdf(await this.read(attachment, false), attachment.name, signal)
+    if (pdf.length > this.config.maxAttachmentBytes) throw new PersonalChatError('attachment-limit', 'The exported PDF exceeds the file limit')
+    return pdf
   }
   async text(attachment: ChatAttachment, temporary: boolean, offset: number, signal: AbortSignal): Promise<AttachmentText & { nextOffset?: number; totalCharacters: number }> {
     signal.throwIfAborted()

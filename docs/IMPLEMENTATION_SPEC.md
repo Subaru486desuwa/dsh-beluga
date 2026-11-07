@@ -30,6 +30,16 @@ The base plugin contains Chat and Memory. Office capabilities are a separately d
 
 ## Implementation approach
 
+Office files follow these rules:
+
+- Official tools come first: the Harness LibreOffice Kit renders and recalculates, `docx` writes Word, and ExcelJS writes new workbooks only, because it loses parts of workbooks it reads.
+- A change to an existing file rewrites only the XML parts it touches, and every other part keeps its exact content. Filling a template is the exception: `patchDocument` reserializes the XML parts without changing what they say.
+- LibreOffice's output is read and never delivered. Calculated values are copied beside the formulas in the original file, and Excel is told to calculate on opening.
+- Formulas written by a model cannot fetch from the network, reach another workbook or start a program. A workbook that already can, through a formula, a defined name or a link part, is not sent to the engine.
+- A paragraph edit names the text it expects. If the file no longer reads that way, the edit is refused.
+- An edit that would remove an image or field, or land inside another author's tracked change while tracking, is refused rather than approximated.
+- Temporary Chat bytes never reach the engine, because it needs files on disk. Its tool results say that nothing was calculated or checked.
+
 The base package contains its Host service, browser plugin, generated Remote descriptors and an installable bundle patch. The separate Office package owns XML parsing and document-rendering dependencies and registers its engine only when explicitly installed and enabled. Normal conversations use one plugin-owned durable data model; temporary conversations and attachments remain in memory. The plugin does not create native Work Sessions or modify stock provider instances.
 
 The initial compatibility target is DSH 0.2.1-rc.3. Model/image route support is declared from verified public adapter behavior, not inferred from a model name.

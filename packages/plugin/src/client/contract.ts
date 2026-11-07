@@ -1,5 +1,5 @@
 import type { InjectFace, PropsLocale, PropsRuntime, PropsStore, HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ArchiveSelection, BranchId, ConversationId, ImportBatchId, Memory, MemorySource, MemoryCandidate, PersonalProfile, ChatAttachment } from '../shared/types.ts'
+import type { ArchiveSelection, BranchId, ConversationId, ImportBatchId, Memory, MemorySource, MemoryCandidate, OfficePreview, PersonalProfile, ChatAttachment } from '../shared/types.ts'
 import type { ModelRef } from '../shared/models.ts'
 import type { createPersonalViewStore } from './stores.ts'
 import type { PersonalState } from './model.ts'
@@ -26,6 +26,8 @@ export interface PersonalCommands {
   removeAttachment(id: string): Promise<boolean>
   upload(file: File): Promise<ChatAttachment | undefined>
   attachment(id: string, original?: boolean): Promise<{ name: string; mediaType: string; base64: string }>
+  previewFile(id: string, sheet?: string): Promise<OfficePreview>
+  exportPdf(id: string): Promise<{ name: string; base64: string }>
   section(section: PersonalState['section']): Promise<boolean>
   proposeMemory(text: string, category: Memory['category'], source: MemorySource): Promise<boolean>
   updateProfile(profile: PersonalProfile): Promise<boolean>

@@ -15,9 +15,9 @@ describe('bounded in-memory Office reading', () => {
   it('resolves workbook relationships and preserves strings, formula and cache separately', () => {
     const result = read({ 'xl/workbook.xml': '<workbook><sheets><sheet name="预算" r:id="rId1"/></sheets></workbook>', 'xl/_rels/workbook.xml.rels': '<Relationships><Relationship Id="rId1" Target="worksheets/sheet7.xml"/></Relationships>', 'xl/sharedStrings.xml': '<sst><si><t>00123</t></si></sst>', 'xl/worksheets/sheet7.xml': '<worksheet><sheetData><row><c r="A1" t="s"><v>0</v></c><c r="B1"><f>SUM(B2:B4)</f><v>230000</v></c></row></sheetData></worksheet>' }, 'budget.xlsx')
     expect(result.text).toContain('预算')
-    expect(result.text).toContain('"value":"00123"')
-    expect(result.text).toContain('"formula":"SUM(B2:B4)"')
-    expect(result.text).toContain('"cachedValue":"230000"')
+    expect(result.text).toContain('"00123"')
+    expect(result.text).toContain('"B1":"SUM(B2:B4)"')
+    expect(result.text).toContain('230000')
     expect(result.text).toContain('not recalculated')
   })
   it('reads slides in presentation order, including notes', () => {

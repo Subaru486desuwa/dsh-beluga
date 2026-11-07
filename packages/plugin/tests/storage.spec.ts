@@ -80,13 +80,12 @@ describe('conversation rows', () => {
   it('reads the same record back from disk', async () => {
     const store = await open()
     const first = entry('first')
-    const record: ConversationRecord = { ...appended(chat([first]), entry('second')), omittedMessages: 3, documents: { [randomUUID()]: { title: 'Plan', blocks: [{ kind: 'paragraph', text: 'Body' }] } } }
+    const record: ConversationRecord = { ...appended(chat([first]), entry('second')), omittedMessages: 3 }
     store.saveConversation(record)
     await store.close()
     const again = (await open(pathOf(store))).conversation(record.conversation.id)
     expect(again?.entries.map(item => item.id)).toEqual(record.entries.map(item => item.id))
     expect(again?.omittedMessages).toBe(3)
-    expect(again?.documents).toEqual(record.documents)
     expect(again?.conversation).toEqual(record.conversation)
   })
   it('refuses a write that would lose stored entries', async () => {
@@ -282,6 +281,23 @@ describe('stored versions', () => {
     await rm(path, { recursive: true, force: true })
     expect(names).toEqual(['personal_chat_meta', 'personal_chat_records'])
   })
+  it('drops the document sources a version 3 database kept, and keeps its chats', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'personal-chat-storage-'))
+    const first = await PersonalStore.open(path)
+    const saved = chat([entry('Kept across the upgrade')])
+    first.saveConversation(saved)
+    await first.close()
+    const file = join(path, 'personal-chat.sqlite3')
+    const old = new DatabaseSync(file)
+    old.exec(`CREATE TABLE personal_chat_documents(id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, value TEXT NOT NULL); INSERT INTO personal_chat_documents VALUES('d','${saved.conversation.id}','{}'); UPDATE personal_chat_meta SET version=3`)
+    old.close()
+    const store = await open(path)
+    expect(store.conversation(saved.conversation.id)?.entries).toHaveLength(1)
+    const check = new DatabaseSync(file, { readOnly: true })
+    expect(check.prepare("SELECT name FROM sqlite_master WHERE name='personal_chat_documents'").all()).toEqual([])
+    expect(check.prepare('SELECT version FROM personal_chat_meta').get()).toMatchObject({ version: 4 })
+    check.close()
+  })
   it('upgrades a version 2 database in place and keeps its chats', async () => {
     const path = await mkdtemp(join(tmpdir(), 'personal-chat-storage-'))
     const first = await PersonalStore.open(path)
@@ -289,7 +305,7 @@ describe('stored versions', () => {
     first.saveConversation(saved)
     await first.close()
     const old = new DatabaseSync(join(path, 'personal-chat.sqlite3'))
-    old.exec('ALTER TABLE personal_chat_conversations DROP COLUMN pinned; UPDATE personal_chat_meta SET version=2')
+    old.exec('ALTER TABLE personal_chat_conversations DROP COLUMN pinned; CREATE TABLE personal_chat_documents(id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, value TEXT NOT NULL); UPDATE personal_chat_meta SET version=2')
     old.close()
     const store = await open(path)
     expect(store.conversation(saved.conversation.id)?.entries).toHaveLength(1)

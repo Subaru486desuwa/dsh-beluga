@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,8 +13,11 @@ import type { ConversationRecord } from '../src/host/records.ts'
 import type { ConversationDetail, ConversationId } from '../src/shared/types.ts'
 import { fixture } from './fixtures/chatgpt.ts'
 import { pdf } from './fixtures/pdf.ts'
+import { wordDocument, workbook } from './office-fixtures.ts'
 
 const route = { provider: 'fixture', model: 'echo' }
+/** Long enough for the Office engine to start and open a file. */
+const ENGINE_TIME = 60000
 class ScriptedModel extends LlmAdapter {
   readonly requests: { sessionId: unknown; system?: string; messages: unknown; tools: readonly string[] }[] = []
   nextTool?: { name: string; arguments: object }
@@ -75,9 +78,9 @@ async function setup(path?: string, office = false, config: object = {}) {
 async function send(service: PersonalChatService, detail: ConversationDetail, text: string, extra: object = {}) {
   return service.send({ conversationId: detail.conversation.id, requestId: randomUUID(), branchId: detail.conversation.selectedBranchId, text, model: route, ...extra })
 }
-async function settled(service: PersonalChatService, id: ConversationId): Promise<ConversationDetail> {
+async function settled(service: PersonalChatService, id: ConversationId, wait = 10000): Promise<ConversationDetail> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 10000)
+  const timer = setTimeout(() => controller.abort(), wait)
   try {
     for await (const update of service.followConversation({ conversationId: id }, controller.signal)) {
       if (update.kind === 'failure') throw new Error(update.reason)
@@ -308,27 +311,37 @@ describe('plugin-owned conversations on the real LLM service', () => {
 })
 
 describe('Office artifact publication', () => {
+  const paragraphAt = (text: string, needle: string) => JSON.parse(text.split('\n').find(line => line.includes(needle))!) as { part: string; location: string; text: string }
+  const read = async (app: Awaited<ReturnType<typeof setup>>, chat: ConversationDetail, attachmentId: string) => {
+    app.adapter.nextTool = { name: 'read_attachment', arguments: { attachmentId } }
+    await send(app.service, chat, 'Read it')
+    const done = await settled(app.service, chat.conversation.id)
+    return { done, text: (JSON.parse(done.messages.at(-2)!.text) as { text: string }).text }
+  }
   it('publishes immutable editable versions with branch ownership and restart persistence', async () => {
     const app = await setup(undefined, true)
     const chat = await app.service.create({ temporary: false })
     const source = { title: '预算报告', blocks: [{ kind: 'heading', level: 1, text: '预算' }, { kind: 'paragraph', text: '230000' }] }
     app.adapter.nextTool = { name: 'create_document', arguments: source }
     await send(app.service, chat, 'Create a report')
-    const first = await settled(app.service, chat.conversation.id)
+    const first = await settled(app.service, chat.conversation.id, ENGINE_TIME)
     expect(first.error).toBeUndefined()
     expect(first.attachments, JSON.stringify(first.messages)).toHaveLength(1)
     const original = first.attachments[0]!
     expect(original.artifact).toMatchObject({ version: 1, rootId: original.id })
     expect(first.messages.find(message => message.role === 'tool')?.attachmentIds).toEqual([original.id])
     const originalBytes = await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: original.id, original: true })
-    app.adapter.nextTool = { name: 'revise_document', arguments: { attachmentId: original.id, summary: 'Update actuals', changes: [{ index: 1, block: { kind: 'paragraph', text: '235000' } }] } }
-    await send(app.service, first, 'Change the second block only')
-    const second = await settled(app.service, chat.conversation.id)
+    const { done: readDone, text } = await read(app, first, original.id)
+    const target = paragraphAt(text, '230000')
+    app.adapter.nextTool = { name: 'edit_document', arguments: { attachmentId: original.id, summary: 'Update actuals', changes: [{ location: target.location, expected: target.text, action: 'replace', text: '235000' }] } }
+    await send(app.service, readDone, 'Change the second block only')
+    const second = await settled(app.service, chat.conversation.id, ENGINE_TIME)
+    expect(second.messages.at(-2)?.text).toContain('"opened":true')
     expect(second.attachments).toHaveLength(2)
     expect(second.attachments[1]?.artifact).toMatchObject({ version: 2, parentId: original.id, rootId: original.id })
     expect(await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: original.id, original: true })).toEqual(originalBytes)
     const other = await app.service.create({ temporary: false })
-    app.adapter.nextTool = { name: 'inspect_document', arguments: { attachmentId: original.id } }
+    app.adapter.nextTool = { name: 'read_attachment', arguments: { attachmentId: original.id } }
     await send(app.service, other, 'Read another chat')
     const denied = await settled(app.service, other.conversation.id)
     expect(denied.messages.find(message => message.role === 'tool')?.text).toContain('attachment-forbidden')
@@ -336,10 +349,8 @@ describe('Office artifact publication', () => {
     const restart = await setup(app.path, true)
     const loaded = await restart.service.get({ conversationId: chat.conversation.id })
     expect(loaded.attachments[1]?.artifact?.version).toBe(2)
-    restart.adapter.nextTool = { name: 'inspect_document', arguments: { attachmentId: loaded.attachments[1]!.id } }
-    await send(restart.service, loaded, 'Read revised source')
-    expect((await settled(restart.service, chat.conversation.id)).messages.at(-2)?.text).toContain('235000')
-  })
+    expect((await read(restart, loaded, loaded.attachments[1]!.id)).text).toContain('235000')
+  }, ENGINE_TIME)
   it('keeps generated temporary documents in memory and publishes nothing on invalid input', async () => {
     const app = await setup(undefined, true)
     const chat = await app.service.create({ temporary: true })
@@ -349,12 +360,124 @@ describe('Office artifact publication', () => {
     expect(done.attachments).toHaveLength(1)
     expect(await readdir(join(app.path, 'attachments'))).toEqual([])
     expect(await diskText(app.path)).not.toContain('TEMP_DOC')
-    app.adapter.nextTool = { name: 'revise_document', arguments: { attachmentId: done.attachments[0]!.id, summary: 'Invalid edit', changes: [{ index: 99, block: { kind: 'paragraph', text: 'bad' } }] } }
+    app.adapter.nextTool = { name: 'edit_document', arguments: { attachmentId: done.attachments[0]!.id, summary: 'Invalid edit', changes: [{ location: '/document[1]/body[1]/paragraph[99]', expected: 'x', action: 'replace', text: 'bad' }] } }
     await send(app.service, done, 'Invalid block')
     expect((await settled(app.service, chat.conversation.id)).attachments).toHaveLength(1)
     await app.service.closeTemporary({ conversationId: chat.conversation.id })
     expect(await readdir(join(app.path, 'attachments'))).toEqual([])
     expect(await diskText(app.path)).not.toContain('TEMP_DOC')
+  })
+})
+
+describe('Office files in Chat', () => {
+  async function turn(app: Awaited<ReturnType<typeof setup>>, chat: ConversationDetail, tool: string, args: object, wait = ENGINE_TIME) {
+    app.adapter.nextTool = { name: tool, arguments: args }
+    await send(app.service, chat, 'Use the tool')
+    const done = await settled(app.service, chat.conversation.id, wait)
+    return { done, result: done.messages.filter(item => item.role === 'tool').at(-1)!.text }
+  }
+  const upload = (app: Awaited<ReturnType<typeof setup>>, chat: ConversationDetail, name: string, bytes: Uint8Array) => app.service.upload({ conversationId: chat.conversation.id, name, base64: Buffer.from(bytes).toString('base64') })
+  const budget = () => workbook({ 预算: '<row r="1"><c r="A1" s="1"><v>100</v></c><c r="B1"><f>A1*2</f><v>200</v></c></row>' })
+
+  it('creates a workbook, reports its formulas, and previews it', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: false })
+    const { done, result } = await turn(app, chat, 'create_workbook', { title: '预算', sheets: [{ name: '预算', rows: [['金额', 1200], ['合计', { formula: 'B1*2' }], ['坏', { formula: '1/0' }]] }] })
+    expect(result).toContain('"recalculated":true')
+    expect(result).toContain('#DIV/0!')
+    const file = done.attachments[0]!
+    expect(file).toMatchObject({ name: '预算.xlsx', artifact: { version: 1 } })
+    const preview = await app.service.previewFile({ conversationId: chat.conversation.id, attachmentId: file.id })
+    expect(preview.sheet).toBe('预算')
+    expect(preview.pages).toHaveLength(1)
+    const pdf = await app.service.exportPdf({ conversationId: chat.conversation.id, attachmentId: file.id })
+    expect(Buffer.from(pdf.base64, 'base64').subarray(0, 5).toString()).toBe('%PDF-')
+    expect(app.adapter.requests.at(-1)?.tools).toEqual(expect.arrayContaining(['create_workbook', 'edit_workbook', 'read_sheet']))
+  }, ENGINE_TIME)
+  it('edits an uploaded workbook into a new version and leaves the upload alone', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: false })
+    const source = budget()
+    const attachment = await upload(app, chat, '预算.xlsx', source)
+    await send(app.service, await app.service.get({ conversationId: chat.conversation.id }), 'Attached', { attachmentIds: [attachment.id] })
+    const attached = await settled(app.service, chat.conversation.id)
+    const { done, result } = await turn(app, attached, 'edit_workbook', { attachmentId: attachment.id, summary: 'Raise the budget', changes: [{ sheet: '预算', cell: 'A1', value: 300 }] })
+    expect(result).toContain('"recalculated":true')
+    const file = done.attachments.at(-1)!
+    expect(file.name).toBe('预算.xlsx')
+    expect(file.artifact).toMatchObject({ version: 2, parentId: attachment.id, rootId: attachment.id, summary: 'Raise the budget' })
+    expect(Buffer.from((await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: attachment.id, original: true })).base64, 'base64')).toEqual(Buffer.from(source))
+    const { result: read } = await turn(app, done, 'read_sheet', { attachmentId: file.id, range: 'A1:B1' })
+    expect(read).toContain('[[300,600]]')
+    const leak = await turn(app, done, 'edit_workbook', { attachmentId: file.id, summary: 'Leak', changes: [{ sheet: '预算', cell: 'A1', value: { formula: 'WEBSERVICE("https://example.com")' } }] })
+    expect(leak.done.attachments).toHaveLength(2)
+    expect(leak.result).toContain('invalid-tool-arguments')
+    expect(leak.result).toContain('Formulas cannot reach the network')
+  }, ENGINE_TIME)
+  it('keeps Temporary Chat workbooks off the disk and away from the engine', async () => {
+    const app = await setup(undefined, true)
+    // A private directory makes any file the engine would have written visible here.
+    const scratch = await mkdtemp(join(tmpdir(), 'temporary-office-'))
+    process.env.TMPDIR = scratch
+    onTestFinished(async () => { delete process.env.TMPDIR; await rm(scratch, { recursive: true, force: true }) })
+    const chat = await app.service.create({ temporary: true })
+    const { done, result } = await turn(app, chat, 'create_workbook', { title: 'TEMP_BOOK_SENTINEL', sheets: [{ name: 'S', rows: [[1, { formula: 'A1*2' }]] }] })
+    expect(result).toContain('"recalculated":false')
+    const file = done.attachments[0]!
+    expect(await readdir(join(app.path, 'attachments'))).toEqual([])
+    expect(await diskText(app.path)).not.toContain('TEMP_BOOK')
+    await expect(app.service.previewFile({ conversationId: chat.conversation.id, attachmentId: file.id })).rejects.toThrow('Temporary Chat')
+    await expect(app.service.exportPdf({ conversationId: chat.conversation.id, attachmentId: file.id })).rejects.toThrow('Temporary Chat')
+    const { done: edited, result: second } = await turn(app, done, 'edit_workbook', { attachmentId: file.id, summary: 'Change', changes: [{ sheet: 'S', cell: 'A1', value: 2 }] })
+    expect(second).toContain('"recalculated":false')
+    expect(edited.attachments[1]?.artifact?.version).toBe(2)
+    expect(await readdir(join(app.path, 'attachments'))).toEqual([])
+    expect(await readdir(scratch)).toEqual([])
+  }, ENGINE_TIME)
+  it('edits an uploaded document with tracked changes and fills a template', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: false })
+    const paragraph = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`
+    const attachment = await upload(app, chat, '合同.docx', wordDocument(paragraph('金额 100 元') + paragraph('客户 {{客户}}')))
+    await send(app.service, await app.service.get({ conversationId: chat.conversation.id }), 'Attached', { attachmentIds: [attachment.id] })
+    const attached = await settled(app.service, chat.conversation.id)
+    const first = await turn(app, attached, 'edit_document', { attachmentId: attachment.id, summary: 'Raise', track: true, changes: [{ location: '/document[1]/body[1]/paragraph[1]', expected: '金额 100 元', action: 'replace', text: '金额 200 元' }] })
+    expect(first.result).toContain('"opened":true')
+    const edited = first.done.attachments.at(-1)!
+    expect(edited.artifact).toMatchObject({ version: 2, parentId: attachment.id })
+    expect(Buffer.from((await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: edited.id, original: true })).base64, 'base64').includes('Beluga')).toBe(false)
+    const second = await turn(app, first.done, 'fill_template', { attachmentId: edited.id, summary: 'Fill', values: { 客户: '甲公司' } })
+    expect(second.result).toContain('"unfilled":[]')
+    expect(second.done.attachments.at(-1)!.artifact).toMatchObject({ version: 3, parentId: edited.id, rootId: attachment.id })
+    const read = await turn(app, second.done, 'read_attachment', { attachmentId: second.done.attachments.at(-1)!.id })
+    expect(read.result).toContain('客户 甲公司')
+    expect(read.result).toContain('金额 200 元')
+    const stale = await turn(app, second.done, 'edit_document', { attachmentId: attachment.id, summary: 'Stale', changes: [{ location: '/document[1]/body[1]/paragraph[1]', expected: '不是这样', action: 'delete' }] })
+    expect(stale.result).toContain('document-target')
+    expect(stale.result).toContain('金额 100 元')
+    expect(app.adapter.requests.at(-1)?.tools).toEqual(expect.arrayContaining(['edit_document', 'fill_template']))
+    expect(app.adapter.requests.at(-1)?.tools).not.toContain('revise_document')
+  }, ENGINE_TIME)
+  it('keeps files to their own chat and branch', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: false })
+    const { done } = await turn(app, chat, 'create_workbook', { title: 'Mine', sheets: [{ name: 'S', rows: [[1]] }] })
+    const other = await app.service.create({ temporary: false })
+    const file = done.attachments[0]!.id
+    for (const [tool, args] of [['read_sheet', {}], ['edit_workbook', { summary: 'x', changes: [{ sheet: 'S', cell: 'A1', value: 2 }] }]] as const) {
+      expect((await turn(app, other, tool, { attachmentId: file, ...args })).result).toContain('attachment-forbidden')
+    }
+    await expect(app.service.previewFile({ conversationId: other.conversation.id, attachmentId: file })).rejects.toThrow()
+    await expect(app.service.exportPdf({ conversationId: other.conversation.id, attachmentId: file })).rejects.toThrow()
+  }, ENGINE_TIME)
+  it('says when the Office extension is missing', async () => {
+    const app = await setup()
+    expect((await app.service.limits()).office).toBe(false)
+    const chat = await app.service.create({ temporary: false })
+    const attachment = await upload(app, chat, 'book.xlsx', budget())
+    await expect(app.service.previewFile({ conversationId: chat.conversation.id, attachmentId: attachment.id })).rejects.toThrow('Office')
+    await expect(app.service.exportPdf({ conversationId: chat.conversation.id, attachmentId: attachment.id })).rejects.toThrow('Office')
+    await expect((await setup(undefined, true)).service.limits()).resolves.toMatchObject({ office: true })
   })
 })
 
@@ -378,19 +501,19 @@ it('removing Office disables tools without deleting prior artifacts or sources',
   const chat = await app.service.create({ temporary: false })
   app.adapter.nextTool = { name: 'create_document', arguments: { title: 'Retained', blocks: [{ kind: 'paragraph', text: 'Keep me' }] } }
   await send(app.service, chat, 'Create')
-  const created = await settled(app.service, chat.conversation.id)
+  const created = await settled(app.service, chat.conversation.id, ENGINE_TIME)
   const file = created.attachments[0]!
   expect(file).toBeDefined()
   await fork.dispose()
-  app.adapter.nextTool = { name: 'inspect_document', arguments: { attachmentId: file.id } }
-  await send(app.service, created, 'Inspect after disabling')
+  app.adapter.nextTool = { name: 'edit_document', arguments: { attachmentId: file.id, summary: 'Off', changes: [{ location: '/document[1]/body[1]/paragraph[1]', expected: 'Keep me', action: 'delete' }] } }
+  await send(app.service, created, 'Edit after disabling')
   const stopped = await settled(app.service, chat.conversation.id)
   expect(stopped.messages.filter(item => item.role === 'tool').at(-1)?.text).toContain('office-not-installed')
   expect((await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: file.id, original: true })).base64).toBeTruthy()
   await app.ctx.fiber.dispose()
   const base = await setup(app.path)
   expect((await base.service.get({ conversationId: chat.conversation.id })).attachments).toHaveLength(1)
-})
+}, ENGINE_TIME)
 
 describe('release-blocking limits and failure isolation', () => {
   it('accepts an attachment and an export above the former validation threshold', async () => {

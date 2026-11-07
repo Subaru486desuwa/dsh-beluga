@@ -35,3 +35,16 @@ Local execution logs are under `.artifacts/acceptance/checks/` (gitignored). Tes
 - A reviewed public Git repository, npm owner/name and target market index before publishing. Source and tarball are prepared; no push, npm publish or market submission occurred.
 
 The existing daily Harness installation and its Work data were not changed. No core patch is part of this candidate.
+
+## Word and Excel candidate (2026-11-07)
+
+Checked with 202 automated tests, then with the packed `dsh-beluga` and `dsh-beluga-office` tarballs in an isolated Harness 0.2.1-rc.3 profile on Linux. The daily installation was not touched.
+
+- The isolated database upgraded from version 3 to 4 and kept its chats.
+- `dsh plugin add` succeeded with both tarballs, and the engine came from Harness.
+- Over the real Host transport: read a range, edited an uploaded workbook, created a workbook, previewed sheets, exported a PDF, edited an uploaded document with tracked changes, filled a template and created a report with a table of contents and a chart.
+- In headless Chrome: previewed a workbook, switched worksheets, downloaded a PDF and previewed a document, with no page errors.
+- python-docx and openpyxl read every delivered file. The edited workbook kept its chart, comment, conditional formatting, data validation, table, defined name, hidden sheet and merged cells.
+- No engine temporary files remained.
+
+Not checked: opening the files in real Word or Excel, a real model choosing these tools, and macOS or Windows.

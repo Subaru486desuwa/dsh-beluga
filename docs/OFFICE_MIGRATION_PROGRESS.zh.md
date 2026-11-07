@@ -1,6 +1,29 @@
 # Office 迁移开发进度
 
-## 当前候选：结构化读取与 Word 产物版本
+## 当前候选：Word 和 Excel 专项（2026-11-07）
+
+**接入的官方能力：**
+- Harness 自带的 `@deepseek-ai/libreoffice-kit` 负责预览、导出 PDF 和重算。Office 扩展把它声明为 peer，不再下载约 146 MB 的引擎，也不会被 `koffi` 的构建脚本拦下。
+- `docx` 负责 Word 生成和模板填充；ExcelJS 只用于新建工作簿。
+
+**新增工具：** `read_sheet`、`create_workbook`、`edit_workbook`、`edit_document`、`fill_template`。`create_document` 增加 `html`、`chart`、`toc`、`pageBreak`，默认带页码，可设页眉。
+
+**移除：** `inspect_document`、`revise_document` 和 `personal_chat_documents` 表。`edit_document` 能直接改任何 DOCX，不再需要保存生成时的结构。存储升到 v4，升级时删除这张表；文件本身不受影响。
+
+**模型能看到的结果：**
+- `edit_workbook`、`create_workbook` 返回 `check`：是否重算、公式数、错误单元格、引擎不支持的函数。
+- Word 工具返回 `check`：文件能否打开、页数、缺失字体。
+- 工具失败时带上具体原因，模型可以自行改正，例如段落已变化、合并单元格不能改。
+
+**已知限制：**
+- 重算结果来自 LibreOffice，个别函数和 Excel 可能不同。不支持的函数保留原值并列入 `unverified`。
+- 预览是 LibreOffice 的版面，和 Word、Excel 可能略有差异。生成文档使用 Calibri 和微软雅黑，Linux 预览会提示缺字体。
+- `HYPERLINK` 公式没有拦截：它和聊天里的链接一样，要用户点击才会发出请求。
+- 只在 Linux 的 WASM 引擎上确认过不联网；macOS 和 Windows 的原生引擎未验证。
+- `edit_workbook` 不能增删工作表或行列，不改合并区的非首格、表格表头和数组公式。`edit_document` 不能增删表格。
+- 没有在真实 Word 和 Excel 中打开过产物。独立复核用的是 python-docx、openpyxl 和 LibreOffice。
+
+## 上一阶段：结构化读取与 Word 产物版本
 
 完整目标与历史基线见 `OFFICE_CHAT_ASSESSMENT.zh.md`；本记录不替代其下一版完成条件。
 
