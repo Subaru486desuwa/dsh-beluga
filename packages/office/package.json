@@ -1,0 +1,48 @@
+{
+  "name": "dsh-personal-chat-office",
+  "version": "0.1.0",
+  "description": "Opt-in Office extension for Personal Chat",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Subaru486desuwa/dsh-chat.git",
+    "directory": "packages/office"
+  },
+  "homepage": "https://github.com/Subaru486desuwa/dsh-chat#readme",
+  "bugs": {
+    "url": "https://github.com/Subaru486desuwa/dsh-chat/issues"
+  },
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": "0.2.1-rc.3"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/types/**/*.js",
+    "lib/types/**/*.d.ts",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "docx": "9.15.2",
+    "fast-xml-parser": "5.12.0",
+    "fflate": "0.8.2"
+  },
+  "peerDependencies": {
+    "dsh-personal-chat": "0.1.0",
+    "@deepseek-ai/cordis": "4.0.5"
+  },
+  "devDependencies": {
+    "dsh-personal-chat": "workspace:*",
+    "@deepseek-ai/cordis": "4.0.5"
+  }
+}

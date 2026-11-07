@@ -1,0 +1,274 @@
+import { z } from 'zod'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import { DatabaseSync, type StatementSync } from 'node:sqlite'
+import { join } from 'node:path'
+import { mkdir, realpath } from 'node:fs/promises'
+import lockfile from 'proper-lockfile'
+import { PersonalChatError } from './archive.ts'
+import { documentInput } from './documents.ts'
+import { Lru } from './lru.ts'
+import { normalized } from './memory.ts'
+import { pacing } from './pacing.ts'
+import { archiveRecord, chatEntry, consistent, conversationHead, importBatch, memoryLedger, textOf, type ArchiveRecord, type ConversationRecord, type MemoryLedger } from './records.ts'
+import type * as T from '../shared/types.ts'
+
+const VERSION = 2
+/** Bounds the assembled conversations held in memory, counted in entries. */
+const CACHED_ENTRIES = 20000
+/**
+ * Rows read between yields while scanning search text. Search scans a normalized copy of the
+ * text instead of using FTS5: on natural text a trigram index measured five times the text
+ * size, and removing one 4 KiB document without leaving postings behind took over a second.
+ */
+const SCAN_WINDOW = 64
+const SCHEMA = `
+CREATE TABLE personal_chat_meta(version INTEGER NOT NULL);
+INSERT INTO personal_chat_meta(version) VALUES(${VERSION});
+CREATE TABLE personal_chat_records(kind TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,id));
+CREATE TABLE personal_chat_conversations(id TEXT PRIMARY KEY, title TEXT NOT NULL, title_key TEXT NOT NULL, updated_at INTEGER NOT NULL, archived INTEGER NOT NULL, listed INTEGER NOT NULL, pending INTEGER NOT NULL, value TEXT NOT NULL);
+CREATE TABLE personal_chat_entries(conversation_id TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(conversation_id,seq));
+CREATE TABLE personal_chat_documents(id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX personal_chat_document_owner ON personal_chat_documents(conversation_id);
+CREATE TABLE personal_chat_archives(id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, conversation_id TEXT NOT NULL, source_id TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX personal_chat_archive_batch ON personal_chat_archives(batch_id);
+CREATE INDEX personal_chat_archive_owner ON personal_chat_archives(conversation_id);
+CREATE INDEX personal_chat_archive_source ON personal_chat_archives(source_id);
+CREATE TABLE personal_chat_search_text(id INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL, revision_id TEXT, text TEXT NOT NULL);
+CREATE INDEX personal_chat_search_owner ON personal_chat_search_text(conversation_id);
+CREATE INDEX personal_chat_search_revision ON personal_chat_search_text(revision_id) WHERE revision_id IS NOT NULL;
+`
+
+interface Table<K extends string, V> {
+  get(key: K): V | undefined
+  entries(): [K, V][]
+  put(key: K, value: V): Promise<void>
+  delete(key: K): Promise<boolean>
+}
+const initial: MemoryLedger = { profile: { revision: 0, background: '', instructions: '', autoSaveLowRisk: true, updatedAt: 0 }, memories: [], candidates: [], suppressed: [] }
+function decode<V>(schema: z.ZodType<V>, value: unknown): V {
+  try { return schema.parse(JSON.parse(String(value))) }
+  catch { throw new PersonalChatError('invalid-storage', 'A stored personal record cannot be decoded; restore a valid backup before continuing') }
+}
+
+/** One private database and writer lease; it never touches Harness Session storage. */
+export class PersonalStore {
+  private compromised = false
+  private closed = false
+  private readonly statements = new Map<string, StatementSync>()
+  private readonly records = new Lru<T.ConversationId, ConversationRecord>(CACHED_ENTRIES, record => record.entries.length + 1)
+  readonly batches: Table<T.ImportBatchId, T.ImportBatch>
+  readonly global: { get(): MemoryLedger; set(value: MemoryLedger): Promise<void> }
+  private constructor(private readonly db: DatabaseSync, private readonly release: () => Promise<void>) {
+    this.batches = this.makeTable('batches', importBatch, value => value.id)
+    const globals = this.makeTable<string, MemoryLedger>('global', memoryLedger)
+    this.global = { get: () => globals.get('memory') ?? structuredClone(initial), set: value => globals.put('memory', value) }
+  }
+  static async open(directory: string): Promise<PersonalStore> {
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    const path = await realpath(directory)
+    let store: PersonalStore | undefined
+    const release = await lockfile.lock(path, { realpath: false, stale: 30000, update: 10000, retries: 0, onCompromised: () => { if (store) store.compromised = true } })
+    let db: DatabaseSync | undefined
+    try {
+      db = new DatabaseSync(join(path, 'personal-chat.sqlite3'))
+      db.exec('PRAGMA busy_timeout=5000')
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()
+      if (tables.length && !tables.some(row => row.name === 'personal_chat_meta')) throw new PersonalChatError('invalid-storage', 'The configured database belongs to another application')
+      if (tables.length && db.prepare('SELECT version FROM personal_chat_meta').get()?.version !== VERSION) throw new PersonalChatError('storage-version', 'This plugin cannot read the stored data version')
+      db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;')
+      if (!tables.length) db.exec('BEGIN IMMEDIATE;' + SCHEMA + 'COMMIT;')
+      store = new PersonalStore(db, release)
+      return store
+    } catch (error) { db?.close(); await release(); throw error }
+  }
+  private available(): void {
+    if (this.closed || this.compromised) throw new PersonalChatError('storage-unavailable', 'Personal Chat storage is closed or its writer lease was lost')
+  }
+  private sql(text: string): StatementSync {
+    let statement = this.statements.get(text)
+    if (!statement) { statement = this.db.prepare(text); this.statements.set(text, statement) }
+    return statement
+  }
+  private makeTable<K extends string, V>(kind: string, schema: z.ZodType<V>, keyOf?: (value: V) => string): Table<K, V> {
+    const read = (key: string, value: unknown): V => {
+      const result = decode(schema, value)
+      if (keyOf && keyOf(result) !== key) throw new PersonalChatError('invalid-storage', 'A stored personal record cannot be decoded; restore a valid backup before continuing')
+      return result
+    }
+    return {
+      get: key => { this.available(); const row = this.sql('SELECT value FROM personal_chat_records WHERE kind=? AND id=?').get(kind, key); return row ? read(key, row.value) : undefined },
+      entries: () => { this.available(); return this.sql('SELECT id,value FROM personal_chat_records WHERE kind=?').all(kind).map(row => [String(row.id) as K, read(String(row.id), row.value)]) },
+      put: async (key, value) => { this.available(); const valid = schema.parse(value); if (keyOf && keyOf(valid) !== key) throw new PersonalChatError('invalid-storage', 'Record identity does not match its storage key'); this.sql('INSERT INTO personal_chat_records(kind,id,value) VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET value=excluded.value').run(kind, key, JSON.stringify(valid)) },
+      delete: async key => { this.available(); return Number(this.sql('DELETE FROM personal_chat_records WHERE kind=? AND id=?').run(kind, key).changes) > 0 },
+    }
+  }
+  /** Read one conversation; decoding happens once, then it is served from memory until evicted. */
+  conversation(id: T.ConversationId): ConversationRecord | undefined {
+    this.available()
+    const cached = this.records.get(id)
+    if (cached) return cached
+    const row = this.sql('SELECT value FROM personal_chat_conversations WHERE id=?').get(id)
+    if (!row) return undefined
+    const entries = this.sql('SELECT value FROM personal_chat_entries WHERE conversation_id=? ORDER BY seq').all(id).map(item => decode(chatEntry, item.value))
+    const documents = this.sql('SELECT id,value FROM personal_chat_documents WHERE conversation_id=?').all(id).map(item => [String(item.id), decode(documentInput, item.value)])
+    const record: ConversationRecord = { ...decode(conversationHead, row.value), entries, ...(documents.length ? { documents: Object.fromEntries(documents) } : {}) }
+    if (record.conversation.id !== id || !consistent(record)) throw new PersonalChatError('invalid-storage', 'A stored conversation has inconsistent identities or references')
+    this.records.set(id, record)
+    return record
+  }
+  /**
+   * Store one conversation by appending its new entries and documents; earlier rows are
+   * never rewritten, so the cost of a save does not grow with the length of the history.
+   * @param value - the full record; its entries must extend the stored ones.
+   * @throws PersonalChatError when the write would lose stored history.
+   */
+  saveConversation(value: ConversationRecord): void {
+    this.available()
+    const { entries, documents, ...rest } = value
+    const id = rest.conversation.id
+    const stored = this.conversation(id)
+    const known = stored?.entries ?? []
+    if (entries.length < known.length || (known.length > 0 && entries[known.length - 1]!.id !== known.at(-1)!.id)) throw new PersonalChatError('invalid-storage', 'This write would lose stored history')
+    const added = entries.slice(known.length).map(entry => chatEntry.parse(entry))
+    const addedDocuments = Object.entries(documents ?? {}).filter(([key]) => !stored?.documents?.[key]).map(([key, document]) => [key, documentInput.parse(document)] as const)
+    const allDocuments = { ...stored?.documents, ...Object.fromEntries(addedDocuments) }
+    const head = conversationHead.parse(rest)
+    const record: ConversationRecord = { ...head, entries: [...known, ...added], ...(addedDocuments.length || stored?.documents ? { documents: allDocuments } : {}) }
+    if (!consistent(record)) throw new PersonalChatError('invalid-storage', 'Conversation identities or owned references are inconsistent')
+    const { title, updatedAt, archived, branches, archiveRevisions } = head.conversation
+    this.atomic(() => {
+      this.sql('INSERT INTO personal_chat_conversations(id,title,title_key,updated_at,archived,listed,pending,value) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,title_key=excluded.title_key,updated_at=excluded.updated_at,archived=excluded.archived,listed=excluded.listed,pending=excluded.pending,value=excluded.value')
+        .run(id, title, normalized(title), updatedAt, archived ? 1 : 0, !head.deleting && (branches.length > 0 || archiveRevisions.length > 0) ? 1 : 0, head.deleting || head.running ? 1 : 0, JSON.stringify(head))
+      for (const [offset, entry] of added.entries()) {
+        this.sql('INSERT INTO personal_chat_entries(conversation_id,seq,value) VALUES(?,?,?)').run(id, known.length + offset, JSON.stringify(entry))
+        this.index(id, null, normalized(entry.userText ?? textOf(entry.message)))
+      }
+      for (const [key, document] of addedDocuments) this.sql('INSERT INTO personal_chat_documents(id,conversation_id,value) VALUES(?,?,?)').run(key, id, JSON.stringify(document))
+    })
+    this.records.set(id, record)
+  }
+  /** Remove a conversation with everything derived from it, including its search text. */
+  removeConversation(id: T.ConversationId): void {
+    this.available()
+    this.atomic(() => {
+      for (const table of ['entries', 'documents', 'archives', 'search_text']) this.sql(`DELETE FROM personal_chat_${table} WHERE conversation_id=?`).run(id)
+      this.sql('DELETE FROM personal_chat_conversations WHERE id=?').run(id)
+    })
+    this.records.delete(id)
+  }
+  /** Conversations a previous run left mid-turn or mid-delete. */
+  interrupted(): T.ConversationId[] {
+    this.available()
+    return this.sql('SELECT id FROM personal_chat_conversations WHERE pending=1').all().map(row => brandString<T.ConversationId>(String(row.id)))
+  }
+  /**
+   * List conversations from plain columns, without decoding any conversation.
+   * @param filter - `query` is a substring of a title, a message or an imported node.
+   * @returns matching summaries, newest first.
+   */
+  async catalog(filter: { readonly query: string; readonly archived: boolean }): Promise<T.ConversationSummary[]> {
+    this.available()
+    const query = normalized(filter.query)
+    const containing = query ? await this.containing(query) : undefined
+    this.available()
+    return this.sql('SELECT id,title,title_key,updated_at FROM personal_chat_conversations WHERE listed=1 AND archived=? ORDER BY updated_at DESC').all(filter.archived ? 1 : 0)
+      .filter(row => !containing || containing.has(String(row.id)) || String(row.title_key).includes(query))
+      .map(row => ({ id: brandString<T.ConversationId>(String(row.id)), title: String(row.title), updatedAt: Number(row.updated_at) }))
+  }
+  /** Scan in windows so a large history never holds the Host for a whole search. */
+  private async containing(query: string): Promise<Set<string>> {
+    const found = new Set<string>()
+    const last = Number(this.sql('SELECT COALESCE(MAX(id),0) AS id FROM personal_chat_search_text').get()!.id)
+    const pause = pacing()
+    for (let low = 0; low < last; low += SCAN_WINDOW) {
+      this.available()
+      for (const row of this.sql('SELECT DISTINCT conversation_id FROM personal_chat_search_text WHERE id>? AND id<=? AND instr(text,?)>0').all(low, low + SCAN_WINDOW, query)) found.add(String(row.conversation_id))
+      await pause()
+    }
+    return found
+  }
+  private index(conversationId: T.ConversationId, revisionId: T.ArchiveRevisionId | null, text: string): void {
+    if (text) this.sql('INSERT INTO personal_chat_search_text(conversation_id,revision_id,text) VALUES(?,?,?)').run(conversationId, revisionId, text)
+  }
+  archive(id: T.ArchiveRevisionId): ArchiveRecord | undefined {
+    this.available()
+    const row = this.sql('SELECT value FROM personal_chat_archives WHERE id=?').get(id)
+    return row ? decode(archiveRecord, row.value) : undefined
+  }
+  hasArchive(id: T.ArchiveRevisionId): boolean { this.available(); return this.sql('SELECT 1 FROM personal_chat_archives WHERE id=?').get(id) !== undefined }
+  /**
+   * Store one imported revision.
+   * @param searchText - normalized node text, each node on its own line, so a search never matches across nodes.
+   */
+  saveArchive(value: ArchiveRecord, searchText: string): void {
+    this.available()
+    const record = archiveRecord.parse(value)
+    this.atomic(() => {
+      this.sql('INSERT INTO personal_chat_archives(id,batch_id,conversation_id,source_id,value) VALUES(?,?,?,?,?)').run(record.id, record.batchId, record.conversationId, record.sourceId, JSON.stringify(record))
+      this.index(record.conversationId, record.id, searchText)
+    })
+  }
+  removeArchive(id: T.ArchiveRevisionId): void {
+    this.available()
+    this.atomic(() => {
+      this.sql('DELETE FROM personal_chat_search_text WHERE revision_id=?').run(id)
+      this.sql('DELETE FROM personal_chat_archives WHERE id=?').run(id)
+    })
+  }
+  archivesForSource(sourceId: string): ArchiveRecord[] {
+    this.available()
+    return this.sql('SELECT value FROM personal_chat_archives WHERE source_id=?').all(sourceId).map(row => decode(archiveRecord, row.value))
+  }
+  archiveOwners(batchId: T.ImportBatchId): T.ConversationId[] {
+    this.available()
+    return this.sql('SELECT DISTINCT conversation_id FROM personal_chat_archives WHERE batch_id=?').all(batchId).map(row => brandString<T.ConversationId>(String(row.conversation_id)))
+  }
+  /** Conversations with a branch that continued from any of these revisions. */
+  continuationsOf(revisionIds: readonly T.ArchiveRevisionId[]): T.ConversationId[] {
+    this.available()
+    return this.sql("SELECT DISTINCT c.id FROM personal_chat_conversations c, json_each(c.value,'$.conversation.branches') b WHERE json_extract(b.value,'$.archive.revisionId') IN (SELECT value FROM json_each(?))").all(JSON.stringify(revisionIds)).map(row => brandString<T.ConversationId>(String(row.id)))
+  }
+  archiveBytes(): number {
+    this.available()
+    return Number(this.sql('SELECT COALESCE(SUM(octet_length(value)),0) AS bytes FROM personal_chat_archives').get()!.bytes)
+  }
+  private atomic(operation: () => void): void {
+    if (this.db.isTransaction) { operation(); return }
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      operation()
+      this.db.exec('COMMIT')
+    } catch (error) {
+      if (this.db.isTransaction) this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+  /**
+   * Run one serialized multi-row change as a single atomic commit. Autocommit costs one
+   * fsync per row under synchronous=FULL, which stalls the Host on bulk writes.
+   * @param operation - writes to apply; a rejection rolls all of them back.
+   * @returns the operation result once durably committed.
+   */
+  async transaction<R>(operation: () => Promise<R>): Promise<R> {
+    this.available()
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = await operation()
+      this.db.exec('COMMIT')
+      return result
+    } catch (error) {
+      if (this.db.isTransaction) this.db.exec('ROLLBACK')
+      this.records.clear()
+      throw error
+    }
+  }
+  checkpoint(): void { this.available(); this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)') }
+  async close(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    this.records.clear()
+    try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); this.db.close() }
+    finally { await this.release() }
+  }
+}
+export type PersonalDomain = PersonalStore

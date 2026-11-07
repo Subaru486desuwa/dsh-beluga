@@ -6,9 +6,19 @@
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "engines": {
-    "node": ">=24.9.0"
+    "node": ">=24.9.0",
+    "dsh": "0.2.1-rc.3"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Subaru486desuwa/dsh-chat.git",
+    "directory": "packages/plugin"
+  },
+  "homepage": "https://github.com/Subaru486desuwa/dsh-chat#readme",
+  "bugs": {
+    "url": "https://github.com/Subaru486desuwa/dsh-chat/issues"
+  },
   "keywords": [
     "deepseek-harness",
     "dsh-plugin",
@@ -79,19 +89,26 @@
     "@deepseek-ai/schemastery": "3.18.5",
     "fflate": "0.8.2",
     "zod": "4.4.3",
-    "pdfjs-dist": "6.5.438"
+    "pdfjs-dist": "6.5.438",
+    "openai": "7.19.0",
+    "sharp": "0.35.5",
+    "proper-lockfile": "4.1.2",
+    "mdast-util-from-markdown": "2.0.2",
+    "mdast-util-math": "3.0.0",
+    "micromark-extension-math": "3.1.0",
+    "micromark-extension-gfm": "3.0.0",
+    "mdast-util-gfm": "3.1.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-storage-domain": "0.2.1-rc.3",
     "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.3",
-    "react": "^18.2.0"
+    "react": "^18.2.0",
+    "@deepseek-ai/dsh-credentials": "0.2.1-rc.3"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-storage-domain": "0.2.1-rc.3",
     "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.3",
     "react": "^18.2.0",
     "@deepseek-ai/dsh-api-gateway": "0.2.1-rc.3",
@@ -102,6 +119,11 @@
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-layout": "0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-sidebar": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.3"
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-credentials": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-web": "0.2.1-rc.3",
+    "@types/proper-lockfile": "4.1.4",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.1-rc.3",
+    "@types/mdast": "4.0.4"
   }
 }

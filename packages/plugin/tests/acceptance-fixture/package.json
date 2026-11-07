@@ -1,0 +1,8 @@
+{
+  "name": "dsh-personal-chat-acceptance-fixture",
+  "private": true,
+  "type": "module",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.3"
+  }
+}
