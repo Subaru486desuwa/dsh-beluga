@@ -78,7 +78,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     if (principalOf(this.ctx.invocation) !== undefined) throw new RemoteError('personal-chat/forbidden', 'Personal Chat is restricted to the Host owner', {})
   }
   /** Effective upload limits, without provider configuration or credentials. */
-  @Remote async limits(): Promise<UploadLimits> { this.owner(); return { office: !!this.ctx.get('personalChatOffice'), uploadBytes: this.config.maxUploadBytes, attachmentBytes: this.config.maxAttachmentBytes, profileBytes: this.config.maxProfileBytes } }
+  @Remote async limits(): Promise<UploadLimits> { this.owner(); return { office: !!this.ctx.get('personalChatOffice'), uploadBytes: this.config.maxUploadBytes, archiveBytes: this.config.maxArchiveBytes, zipEntries: this.config.maxZipEntries, attachmentBytes: this.config.maxAttachmentBytes, profileBytes: this.config.maxProfileBytes } }
   /** Configured Harness models, plus any explicitly configured inline image models. */
   @Remote async models(): Promise<readonly ModelChoice[]> { this.owner(); return this.bridge.models() }
   /** List plugin histories only. Temporary conversations are never added to history. */

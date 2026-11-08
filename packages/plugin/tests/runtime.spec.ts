@@ -11,7 +11,8 @@ import OfficeExtension from '../../office/lib/index.js'
 import { PersonalStore } from '../src/host/storage.ts'
 import type { ConversationRecord } from '../src/host/records.ts'
 import type { ConversationDetail, ConversationId } from '../src/shared/types.ts'
-import { fixture } from './fixtures/chatgpt.ts'
+import { zipSync } from 'fflate'
+import { currentExport, fixture } from './fixtures/chatgpt.ts'
 import { pdf } from './fixtures/pdf.ts'
 import { wordDocument, workbook } from './office-fixtures.ts'
 
@@ -218,6 +219,30 @@ describe('plugin-owned conversations on the real LLM service', () => {
     await app.service.deleteConversation({ conversationId: first.conversation.id })
     expect(await readdir(join(app.path, 'attachments'))).toEqual([])
     expect((await app.service.list({})).map(chat => chat.id)).toEqual([other.conversation.id])
+  })
+
+  it('imports a sharded export without children and keeps its reasoning from the model', async () => {
+    const app = await setup()
+    const shard = (id: string) => Buffer.from(JSON.stringify([{ ...currentExport[0], id }]))
+    const zip = zipSync({ 'conversations-000.json': shard('first'), 'conversations-001.json': shard('second') })
+    const preview = await app.service.previewImport({ fileName: 'export.zip', base64: Buffer.from(zip).toString('base64') })
+    expect(preview.items.map(item => [item.sourceId, item.nodes, item.branches, item.warnings.length])).toEqual([['first', 6, 2, 1], ['second', 6, 2, 1]])
+    const imported = await app.service.commitImport({ previewId: preview.id })
+    const id = imported.conversations[0]!
+    const detail = await app.service.get({ conversationId: id })
+    expect(detail.archive?.original).toEqual({ ...currentExport[0], id: 'first' })
+    expect(detail.archive?.branchNodes.filter(node => node.reasoning).map(node => node.id)).toEqual(['thought', 'recap'])
+    await app.service.send({ conversationId: id, requestId: randomUUID(), archive: { revisionId: imported.batch.revisionIds[0]!, nodeId: 'answer' }, text: 'Continue', model: route })
+    await settled(app.service, id)
+    const request = JSON.stringify(app.adapter.requests.at(-1))
+    expect(request).toContain('LOOK_AT_THIS')
+    expect(request).toContain('FINAL_ANSWER')
+    expect(request).not.toContain('RETRIED_ANSWER')
+    expect(request).not.toContain('PRIVATE_REASONING')
+    const repeated = await app.service.commitImport({ previewId: (await app.service.previewImport({ fileName: 'export.zip', base64: Buffer.from(zip).toString('base64') })).id })
+    expect(repeated.batch.skipped).toBe(2)
+    await app.service.undoImport({ batchId: imported.batch.id })
+    expect((await app.service.list({})).map(chat => chat.id)).toEqual([id])
   })
 
   it('preserves imported revisions and continuation context through batch undo', async () => {

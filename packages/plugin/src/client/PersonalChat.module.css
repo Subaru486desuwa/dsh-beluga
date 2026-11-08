@@ -14,7 +14,8 @@
 .search, .field, .textarea { width: 100%; }
 .search { margin-top: 12px; }
 .textarea { min-height: 120px; resize: vertical; line-height: 1.6; }
-.filters, .rowActions, .archiveControls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.filters, .rowActions, .previewActions, .archiveControls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.previewActions { position: sticky; top: -20px; z-index: 1; padding: 12px 0; background: var(--dsw-alias-bg-base); }
 .filters button[aria-pressed='true'] { background: var(--dsw-alias-interactive-bg-hover); }
 .historyRows { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 2px; }
 .historyRow { display: flex; flex-direction: column; width: 100%; gap: 4px; border: 0; border-radius: var(--dsw-radius-md); padding: 10px; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; font-size: 14px; }
@@ -31,6 +32,7 @@
 .branchPicker { display: flex; align-items: center; gap: 12px; margin: 0 24px 12px; font-size: 14px; }
 .page select { max-width: 100%; }
 .archiveBody { flex: 1; min-height: 0; overflow-y: auto; padding: 12px max(24px, calc((100% - 760px) / 2)); }
+.archiveLead { padding: 12px max(24px, calc((100% - 760px) / 2)) 0; }
 .archiveControls label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .archiveMessages { margin: 20px 0; padding: 0; list-style: none; }
 .archiveMessages li { margin-bottom: 28px; }
@@ -39,10 +41,8 @@
 .archiveMessages li[data-archive-role='user'] .messageText { background: var(--dsw-alias-interactive-bg-hover); border-radius: var(--dsw-radius-lg); padding: 12px 16px; }
 .original, .source { font-size: 14px; color: var(--dsw-alias-label-secondary); margin: 12px 0; }
 .original pre { overflow: auto; max-height: 320px; font-size: 12px; }
-.original summary, .source summary, .archiveSource summary { cursor: pointer; }
+.original summary, .source summary { cursor: pointer; }
 .source code { overflow-wrap: anywhere; }
-.archiveSource { flex: none; margin: 0 24px 12px; font-size: 14px; color: var(--dsw-alias-label-secondary); }
-.archiveSourceBody { max-height: 35vh; overflow-y: auto; padding: 16px 2px; }
 .continueInput { display: flex; align-items: flex-end; gap: 12px; margin: 12px auto 24px; width: calc(100% - 48px); max-width: 760px; }
 .continueInput textarea { flex: 1; min-width: 0; min-height: 76px; max-height: 200px; resize: vertical; line-height: 1.6; }
 .management { flex: 1; min-height: 0; overflow-y: auto; padding: 20px max(24px, calc((100% - 760px) / 2)) 48px; }

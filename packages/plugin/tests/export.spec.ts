@@ -20,6 +20,10 @@ describe('conversation export', () => {
     const archive = { branchNodes: [{ role: 'user', text: 'Old question', structural: false }, { role: null, text: '', structural: true }, { role: 'assistant', text: 'Old answer', structural: false }] }
     expect(conversationMarkdown(detail({ archive }), labels)).toBe('# Trip plan\n\n## You\n\nOld question\n\n## Assistant\n\nOld answer\n')
   })
+  it('leaves imported reasoning out, as it does for live replies', () => {
+    const archive = { branchNodes: [{ role: 'user', text: 'Old question', structural: false, reasoning: false }, { role: 'assistant', text: '', structural: false, reasoning: true }, { role: 'assistant', text: 'Old answer', structural: false, reasoning: false }] }
+    expect(conversationMarkdown(detail({ archive }), labels)).toBe('# Trip plan\n\n## You\n\nOld question\n\n## Assistant\n\nOld answer\n')
+  })
   it('names the file after the title without path characters', () => {
     expect(exportName('a/b: c?')).toBe('a_b_ c_.md')
     expect(exportName('')).toBe('chat.md')

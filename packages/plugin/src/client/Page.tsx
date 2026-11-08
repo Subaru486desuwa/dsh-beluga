@@ -36,6 +36,7 @@ export function PersonalPage({ usePersonal, commands, useStore, t }: PersonalPag
   useEffect(() => { const id = temporary ? conversation?.id : undefined; return () => { if (id) currentCommands.current.releaseTemporary(id) } }, [temporary, conversation?.id])
   const exportChat = (value: ConversationDetail) => { saveFile(exportName(value.conversation.title), new Blob([conversationMarkdown(value, { user: t('roleUser'), assistant: t('roleAssistant') })], { type: 'text/markdown' })) }
   const candidates = state.memory?.candidates.filter(candidate => candidate.state === 'pending').length ?? 0
+  const history = detail?.archive && <ArchiveHistory archive={detail.archive} conversation={conversation!} commands={commands} busy={state.busy} t={t} />
   return <div className={css.page} data-detail={detail !== undefined || state.section !== 'chats'}>
     <aside className={css.history} aria-label={t('history')}>
       <div className={css.historyHead}><h1>{t('panel')}</h1><Button size="sm" onClick={commands.work}>{t('work')}</Button></div>
@@ -65,8 +66,7 @@ export function PersonalPage({ usePersonal, commands, useStore, t }: PersonalPag
         {conversation!.archiveWithdrawn && <p className={css.notice}>{t('withdrawn')}</p>}
         {conversation!.branches.length > 1 && <label className={css.branchPicker}>{t('branches')}<select value={conversation!.selectedBranchId ?? ''} disabled={state.busy} onChange={event => { void commands.selectBranch(event.target.value as BranchId) }}>{conversation!.branches.map((item, index) => <option key={item.id} value={item.id}>{t('branch', { number: index + 1 })}</option>)}</select></label>}
         {branch?.snapshot && branch.snapshot.omittedNodes > 0 && <p className={css.notice}>{t('snapshotOmitted', { count: branch.snapshot.omittedNodes })}</p>}
-        {detail.archive !== undefined && (branch === undefined ? <div className={css.archiveBody}><ArchiveHistory archive={detail.archive} conversation={conversation!} commands={commands} busy={state.busy} t={t} /></div> : <details className={css.archiveSource}><summary>{t('archiveLabel')}</summary><div className={css.archiveSourceBody}><ArchiveHistory archive={detail.archive} conversation={conversation!} commands={commands} busy={state.busy} t={t} /></div></details>)}
-        {branch !== undefined && <ChatMessages state={state} commands={commands} t={t} />}
+        {branch === undefined ? history !== undefined && <div className={css.archiveBody}>{history}</div> : <ChatMessages state={state} commands={commands} t={t}>{history && <div className={css.archiveLead}>{history}</div>}</ChatMessages>}
         {!conversation!.archived && <ChatComposer key={conversation!.id} state={state} commands={commands} t={t} />}
       </>}
     </main>

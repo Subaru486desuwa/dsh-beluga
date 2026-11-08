@@ -48,3 +48,33 @@ Checked with 202 automated tests, then with the packed `dsh-beluga` and `dsh-bel
 - No engine temporary files remained.
 
 Not checked: opening the files in real Word or Excel, a real model choosing these tools, and macOS or Windows.
+
+## Real ChatGPT export (2026-11-07)
+
+Checked with the packed `dsh-beluga` tarball in an isolated Harness 0.2.1-rc.3 profile on Linux, using the local fixture model in headless Chromium. The input was one real official export of 698 MiB holding 339 conversations; it is not in this repository. Before this work every conversation was refused, and earlier checks had only used synthetic JSON.
+
+The export differed from the synthetic shape in three ways: conversations were split into `conversations-000.json` to `-003.json`, mapping nodes had no `children`, and 3,267 of 5,174 messages were reasoning nodes with no spoken text.
+
+- The browser reduced the ZIP to 10.7 MiB in about a second, adding 106 MiB of memory. Streaming it through fflate's `Unzip` took 816 MiB, because skipped entries stay referenced until the end.
+- A 14.2 MiB request crossed the real Remote transport.
+- Preview listed all 339 as new, with 111 warnings for media messages.
+- Commit, reading 25 chats, a full Host restart, continuing a chat, re-importing (339 skipped) and batch undo (the continued chat kept) all passed with no page errors.
+
+The packed plugin was then installed into a daily `web` profile beside `@linxin666/dsh-ssh` and `@shiqyka/dsh-ssh-workspace`. After a service restart all their sidebar entries and the Chat import page loaded with no page errors, and only `dsh-beluga` was added to the profile's dependencies.
+
+### Reachability and continuation
+
+The first real attempt on the daily profile stopped at the preview: nothing was committed, so no chat appeared. Two faults were behind it, and the acceptance above missed both.
+
+- The confirm button sat below all 339 rows, 43 screens down. Playwright's `click()` scrolls to its target, so the script reached a button a person would not find. Checks now measure the button's box and run `elementFromPoint` with no auto-scroll.
+- Once a chat was continued, its history collapsed into a closed disclosure.
+
+The confirm and discard buttons now come before the list and stay pinned while it scrolls, and a continued chat shows history and new messages in one scroll region. In headless Chromium at 1000×695 with 339 synthetic rows, the button stayed in view and took the hit test after scrolling 12,000 px. A continued chat opened on the newest message with its history above it.
+
+40 of the export's 1,892 visible messages were voice messages whose text sits in `audio_transcription` parts, and they had imported blank. They now import as text, which also puts them in search and in the snapshot sent to the model. The 11 blank messages left are 3 image-only messages and 8 that are empty in the source.
+
+The real export then passed the full flow again in the isolated profile, with the fixture model.
+
+On the daily profile a one-conversation synthetic export was imported, and a real configured model was asked for a codeword that existed only in the imported history. It answered correctly on two turns, and the conversation and batch were then removed.
+
+Not checked: importing this real export into the daily profile, a real model on a real imported chat, a real snapshot at the 24 KB budget, real Chrome on macOS or Windows, exports other than this one, and ZIP64 on a real file (covered by a built fixture only).

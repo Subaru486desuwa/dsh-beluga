@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Button, MarkdownText, Modal, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatAttachment, ChatMessageView } from '../shared/types.ts'
@@ -69,7 +69,8 @@ function ReadAloud({ text, t }: { text: string; t: TranslateNS<'personalChat'> }
   }
   return <><Button size="sm" onClick={toggle}>{t(reading ? 'stopReading' : 'readAloud')}</Button>{unavailable && <span className={css.muted} role="alert">{t('speechUnavailable')}</span>}</>
 }
-export function ChatMessages({ state, commands, t }: { state: PersonalState; commands: PersonalCommands; t: TranslateNS<'personalChat'> }) {
+/** Live messages share one scroll region with whatever precedes them, so an imported history reads straight into its continuation. @param props - Authoritative state, commands and the content shown above the messages. @returns the message list and its edit dialog. */
+export function ChatMessages({ state, commands, t, children }: { state: PersonalState; commands: PersonalCommands; t: TranslateNS<'personalChat'>; children?: ReactNode }) {
   const detail = state.detail!
   const scroll = useRef<HTMLDivElement>(null)
   const nearBottom = useRef(true)
@@ -84,6 +85,7 @@ export function ChatMessages({ state, commands, t }: { state: PersonalState; com
   const copy = async (message: ChatMessageView) => { await writeClipboard(message.text); setCopied(message.id); setTimeout(() => setCopied(undefined), 1500) }
   return <>
     <div className={css.messages} ref={scroll} onScroll={() => { const el = scroll.current; if (el) nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100 }}>
+      {children}
       <div className={css.messageColumn}>
         {detail.messages.map(message => <article key={message.id} className={css.chatMessage} data-role={message.role}>
           <div className={css.messageMeta}><span>{message.role}</span><time>{new Date(message.time).toLocaleTimeString()}</time></div>

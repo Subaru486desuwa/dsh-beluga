@@ -22,7 +22,7 @@ export function conversationMarkdown(detail: ConversationDetail, labels: ExportL
     const label = heading(role)
     if (label) blocks.push(`## ${label}`, ...parts.filter(Boolean))
   }
-  for (const node of detail.archive?.branchNodes ?? []) if (!node.structural) add(node.role, node.text)
+  for (const node of detail.archive?.branchNodes ?? []) if (!node.structural && !node.reasoning) add(node.role, node.text)
   for (const message of detail.messages) {
     const files = message.attachmentIds.flatMap(id => detail.attachments.find(file => file.id === id)?.name ?? [])
     add(message.role, message.text, ...files, (message.sources ?? []).map(sourceLine).join('\n'))

@@ -10,6 +10,7 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import personalRemote from 'dsh-beluga/remote'
 import type { PersonalChatOperations, ChatAttachment } from '../shared/types.ts'
 import { PersonalModel } from './model.ts'
+import { exportUpload } from './export-upload.ts'
 import type { PersonalCommands, PersonalInjected } from './contract.ts'
 import { createPersonalViewStore } from './stores.ts'
 import { PersonalPage, PersonalPanelIcon } from './Page.tsx'
@@ -23,12 +24,14 @@ async function unwrap<T>(promise: Promise<RemoteResult<T>>): Promise<T> {
   if (!result.ok) throw result.error
   return result.value
 }
-async function fileBase64(file: File, maxBytes: number): Promise<string> {
-  if (file.size > maxBytes) throw new Error('File exceeds the upload size limit')
-  const data = new Uint8Array(await file.arrayBuffer())
+function bytesBase64(data: Uint8Array): string {
   let binary = ''
   for (let offset = 0; offset < data.length; offset += 32768) binary += String.fromCharCode(...data.subarray(offset, offset + 32768))
   return btoa(binary)
+}
+async function fileBase64(file: File, maxBytes: number): Promise<string> {
+  if (file.size > maxBytes) throw new Error('File exceeds the upload size limit')
+  return bytesBase64(new Uint8Array(await file.arrayBuffer()))
 }
 /** Mount one independent Chat destination. No Work hooks or native Session APIs are used. */
 export async function apply(ctx: Context): Promise<void> {
@@ -71,7 +74,7 @@ function mountView(ctx: Context): void {
     section: section => instance.run(() => instance.section(section)),
     proposeMemory: (text, category, source) => instance.run(() => instance.proposeMemory(text, category, source)),
     updateProfile: profile => instance.run(() => instance.updateProfile(profile), 'changed'), decide: (candidate, decision) => instance.run(() => instance.decide(candidate, decision), 'changed'), editMemory: (memory, text) => instance.run(() => instance.editMemory(memory, text), 'memoryUpdated'), forget: memory => instance.run(() => instance.forget(memory), 'memoryUpdated'),
-    preview: file => instance.run(async () => { await instance.preview(file.name, await fileBase64(file, instance.state.getSnapshot().limits?.uploadBytes ?? 0)) }), discardPreview: () => instance.discardPreview(),
+    preview: file => instance.run(async () => { await instance.preview(file.name, bytesBase64(await exportUpload(file, instance.state.getSnapshot().limits))) }), discardPreview: () => instance.discardPreview(),
     commitImport: () => instance.run(() => instance.commitImport(), 'importComplete'), undoImport: id => instance.run(() => instance.undoImport(id)),
     retry: () => { void instance.refresh() },
     work: () => { if (instance.state.getSnapshot().detail?.conversation.temporary) void instance.run(async () => { await instance.close(); ctx.layout.selectPanel(null) }); else ctx.layout.selectPanel(null) },

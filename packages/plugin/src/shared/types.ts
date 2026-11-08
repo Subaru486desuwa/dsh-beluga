@@ -53,6 +53,8 @@ export interface ArchiveNode {
   readonly time: JsonValue
   readonly text: string
   readonly structural: boolean
+  /** Working material the model wrote while answering, kept in the original but not shown or sent. */
+  readonly reasoning: boolean
   readonly unsupportedContent: boolean
 }
 export interface ArchiveView {
@@ -237,6 +239,9 @@ export interface AttachmentText {
 }
 /** All calls use the authenticated owner Remote namespace `personalChat`. */
 export interface UploadLimits { readonly uploadBytes: number; readonly attachmentBytes: number; readonly profileBytes: number
+  /** Bounds the browser applies before reading an export; the Host enforces them again. */
+  readonly archiveBytes: number
+  readonly zipEntries: number
   /** Whether the Office extension can render files here. */
   readonly office: boolean
 }

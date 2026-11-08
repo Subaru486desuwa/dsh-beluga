@@ -46,13 +46,15 @@ Open **Chat** in the Harness sidebar. Choose a configured model and start a conv
 
 ## Import ChatGPT history
 
-Open **Import** → select an official export ZIP or `conversations.json` → review counts and warnings → **Import**.
+Open **Import** → select an official export ZIP or conversation JSON → review counts and warnings → **Import**.
 
-The importer retains the original JSON, unknown fields, roles, timestamps, `mapping` graph and `current_node`. Select any branch to inspect it. Media references remain in the original archive; export media binaries are not imported or downloaded automatically. Repeated imports are skipped, changed conversations create revisions, and batch undo removes only that batch's archives. Later Chat continuations survive undo.
+A ZIP can be far larger than the upload limit. The browser reads only its conversation JSON, either one `conversations.json` or numbered `conversations-000.json` files, and uploads that. Media stays on your device.
+
+The importer retains the original JSON, unknown fields, roles, timestamps, `mapping` graph and `current_node`. Select any branch to inspect it. Voice messages are read from their transcriptions. Media references remain in the original archive; export media binaries are not imported or downloaded automatically. Reasoning steps stay in the original archive too, but are left out of the history view, Markdown export and model context. Repeated imports are skipped, changed conversations create revisions, and batch undo removes only that batch's archives. Later Chat continuations survive undo.
 
 Continue directly below an imported branch. The model receives a bounded, explicitly untrusted snapshot of that selected branch, not forged native Work logs. Omitted nodes are reported; the complete original archive stays available for viewing.
 
-Defaults: 64 MiB upload, 256 MiB extracted conversation JSON, 10,000 conversations, 500,000 total mapping nodes and 512 MiB stored archives. An unsupported or malformed record rejects the preview instead of silently dropping it. Real official-export compatibility is a separate acceptance step when the user's requested export arrives; current fixtures are synthetic.
+Defaults: 64 MiB upload (for a ZIP, once media is left out), 256 MiB extracted conversation JSON, 10,000 conversations, 500,000 total mapping nodes and 512 MiB stored archives. An unsupported or malformed record rejects the preview instead of silently dropping it. Checked against one real official export from November 2026; repository fixtures stay synthetic. Other exports may differ.
 
 ## Profile and memory
 

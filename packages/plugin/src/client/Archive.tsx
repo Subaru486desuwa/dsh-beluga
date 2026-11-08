@@ -10,6 +10,7 @@ import css from './PersonalChat.module.css'
 export function ArchiveHistory({ archive, conversation, commands, busy, t }: { archive: ArchiveView; conversation: Conversation; commands: PersonalCommands; busy: boolean; t: TranslateNS<'personalChat'> }) {
   const [candidate, setCandidate] = useState<{ nodeId: string; text: string } | undefined>()
   const leaves = archive.nodes.filter(node => node.children.length === 0)
+  const hiddenReasoning = archive.branchNodes.filter(node => node.reasoning).length
   return <>
     <div className={css.archiveControls}>
       <label>{t('archiveRevision')}<select aria-label={t('archiveRevision')} value={archive.revisionId} disabled={busy} onChange={event => {
@@ -22,7 +23,8 @@ export function ArchiveHistory({ archive, conversation, commands, busy, t }: { a
     </div>
     <p className={css.muted}>{t('archiveReadOnly')}</p>
     {archive.warnings.map((warning, index) => <p className={css.notice} key={`${index}:${warning}`}>{warning}</p>)}
-    <ol className={css.archiveMessages}>{archive.branchNodes.filter(node => !node.structural).map(node => <li key={node.id} data-archive-role={node.role}>
+    {hiddenReasoning > 0 && <p className={css.muted}>{t('reasoningHidden', { count: hiddenReasoning })}</p>}
+    <ol className={css.archiveMessages}>{archive.branchNodes.filter(node => !node.structural && !node.reasoning).map(node => <li key={node.id} data-archive-role={node.role}>
       <div className={css.messageMeta}><span>{node.role}</span>{typeof node.time === 'number' && <time>{new Date(node.time * 1000).toLocaleString()}</time>}</div>
       <div className={css.messageText}>{node.text}</div>
       {node.text !== '' && <Button size="sm" disabled={busy} onClick={() => { setCandidate({ nodeId: node.id, text: node.text }) }}>{t('remember')}</Button>}
