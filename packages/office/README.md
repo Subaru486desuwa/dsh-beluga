@@ -12,10 +12,11 @@ Restart the profile. It adds:
 
 - `read_sheet`, and DOCX, XLSX and PPTX reading through `read_attachment`.
 - `create_document`, `edit_document`, `fill_template` for Word.
-- `create_workbook`, `edit_workbook` for Excel, with recalculation and an error report.
+- `create_workbook`, `edit_workbook` for Excel, with native charts, recalculation and an error report.
+- `create_presentation` for PowerPoint: slides in eight fixed layouts on a built-in theme, with native charts, speaker notes and a report of text that does not fit.
 - Preview and PDF export on file cards.
 
-Rendering and recalculation use `@deepseek-ai/libreoffice-kit` (MPL-2.0) as a peer: Harness ships it, so this package does not download the engine. LibreOffice's copy of a workbook is only read for its values; the delivered file stays the original plus the requested changes.
+Rendering and recalculation use `@deepseek-ai/libreoffice-kit` (MPL-2.0) as a peer: Harness ships it, so this package does not download the engine. Decks are written with pptxgenjs, pinned to 4.0.1, and then finished so every typeface follows the theme, the notes master has its own theme and only existing parts are declared. LibreOffice's copy of a workbook is only read for its values; the delivered file stays the original plus the requested changes.
 
 No shell or install tool is exposed to models. Temporary Chat stays in memory, so nothing it holds reaches the engine, which needs files on disk.
 

@@ -5,5 +5,6 @@ export type * from './shared/models.ts'
 
 export { PersonalChatError } from './host/archive.ts'
 export { validateDocument, type DocumentCheck, type DocumentInput, type ParagraphChange } from './host/documents.ts'
-export { reachesOutside, validateWorkbook, type CellChange, type WorkbookCell, type WorkbookCheck, type WorkbookInput } from './host/workbooks.ts'
+export { validatePresentation, type PresentationCheck, type PresentationInput, type Slide, type SlideImage, type SlideIssue } from './host/presentations.ts'
+export { reachesOutside, validateWorkbook, type CellChange, type ChartCheck, type WorkbookCell, type WorkbookChart, type WorkbookCheck, type WorkbookInput } from './host/workbooks.ts'
 export { officeFormat, type OfficeEngine } from './host/office-contract.ts'

@@ -6,12 +6,12 @@ import { PatchType, TextRun, patchDetector, patchDocument } from 'docx'
 import { PersonalChatError } from 'dsh-beluga'
 import type { ParagraphChange } from 'dsh-beluga'
 import { OfficePackage } from './package.ts'
+import { parseLocation } from './locations.ts'
 import { all, buildTree, deep, element, find, getAttr, isElement, kids, localName, parseTree, prefixOf, tagOf, textNode, textOf, unescapeXml, type Element } from './tree.ts'
 
 const MAIN = 'word/document.xml'
 const EDITABLE = /^word\/(?:document|header\d+|footer\d+)\.xml$/u
 const AUTHOR = 'Beluga'
-const LOCATION_TAGS: Readonly<Record<string, string>> = { paragraph: 'p', table: 'tbl', row: 'tr', cell: 'tc' }
 /** What a reader of the document sees as text. */
 const TEXT = new Set(['t', 'tab', 'br', 'cr'])
 /** Removing these with a run loses nothing. Anything else in a run is an image, a field or the like. */
@@ -180,16 +180,22 @@ function deleteParagraph(target: Located, revisions: Revisions | undefined): voi
   siblings.splice(siblings.indexOf(paragraph), 1)
 }
 interface Located { readonly paragraph: Element; readonly siblings: Element[]; readonly parent: Element }
-/** Follow a location as `read_attachment` writes it. */
+/** Follow a location as `read_attachment` writes it, or as earlier versions wrote it. */
 function locate(tree: Element[], location: string): Located {
+  const parsed = parseLocation(location)
+  if (!parsed) throw targetError('Unknown location: ' + location)
   let parent: Element = {}
   let siblings = tree
+  if (parsed.fromBody) {
+    const root = tree.find(node => !tagOf(node).startsWith('?') && !tagOf(node).startsWith('#'))
+    if (!root) throw targetError('This part has no root element')
+    parent = find(kids(root), 'body') ?? root
+    siblings = kids(parent)
+  }
   let node: Element | undefined
-  for (const step of location.split('/').filter(Boolean)) {
-    const match = /^(.+)\[([1-9]\d*)\]$/u.exec(step)
-    if (!match) throw targetError('Unknown location: ' + location)
+  for (const { tag, index } of parsed.steps) {
     if (node) { parent = node; siblings = kids(node) }
-    node = all(siblings, LOCATION_TAGS[match[1]!] ?? match[1]!)[Number(match[2]) - 1]
+    node = all(siblings, tag)[index - 1]
     if (!node) throw targetError('Nothing at ' + location + '; read the file again')
   }
   if (!node || !isElement(node, 'p')) throw targetError('Not a paragraph: ' + location)

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { strFromU8, unzipSync } from 'fflate'
 import { editDocument, fillTemplate } from '../../office/src/document-edit.ts'
 import { extractOfficeText } from '../../office/src/office.ts'
-import { wordDocument, wordXml } from './office-fixtures.ts'
+import { wordDocument, wordParagraphs, wordXml } from './office-fixtures.ts'
 
 const signal = new AbortController().signal
 const LIMIT = 16 * 1024 * 1024
@@ -10,7 +10,7 @@ const at = (index: number) => `/document[1]/body[1]/paragraph[${index}]`
 const body = (bytes: Uint8Array) => strFromU8(unzipSync(bytes)['word/document.xml']!)
 const replace = (index: number, expected: string, text: string) => ({ location: at(index), expected, action: 'replace' as const, text })
 const edit = (bytes: Uint8Array, changes: Parameters<typeof editDocument>[1], track = false) => editDocument(bytes, changes, track, LIMIT, signal)
-const lines = (bytes: Uint8Array) => extractOfficeText(bytes, 'a.docx', LIMIT, signal).text.split('\n').slice(1).map(line => JSON.parse(line) as { text: string })
+const lines = (bytes: Uint8Array) => wordParagraphs(extractOfficeText(bytes, 'a.docx', LIMIT, signal).text)
 const bold = '<w:rPr><w:b/></w:rPr>'
 const italic = '<w:rPr><w:i/></w:rPr>'
 const p = (...runs: string[]) => `<w:p>${runs.join('')}</w:p>`
@@ -52,6 +52,17 @@ describe('replacing text', () => {
     const edited = edit(wordDocument(link + cell), [replace(1, '链接', '新链接'), { location: '/document[1]/body[1]/table[1]/row[1]/cell[1]/paragraph[1]', expected: '😀a', action: 'replace', text: '😁a' }])
     expect(lines(edited).map(line => line.text)).toEqual(['新链接', '😁a'])
     expect(body(edited)).toContain('</w:hyperlink>')
+  })
+  it('takes the short locations reading writes, in the body, a table cell and a footer', () => {
+    const source = wordDocument(p(r('标题')) + `<w:tbl><w:tr><w:tc>${p(r('名称'))}</w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>`, { 'word/footer1.xml': wordXml(p(r('第 1 版'))) })
+    const read = lines(source)
+    expect(read.map(({ part, location, text }) => [part, location, text])).toEqual([['word/document.xml', 'p1', '标题'], ['word/document.xml', 't1.r1.c1.p1', '名称'], ['word/document.xml', 't1.r1.c2.p1', ''], ['word/footer1.xml', 'p1', '第 1 版']])
+    const edited = edit(source, read.map(({ part, location, text }) => ({ part, location, expected: text, action: 'replace' as const, text: text ? text + '！' : '甲项目' })))
+    expect(lines(edited).map(line => line.text)).toEqual(['标题！', '名称！', '甲项目', '第 1 版！'])
+  })
+  it('refuses a malformed short location', () => {
+    expect(() => edit(wordDocument(p(r('a'))), [{ location: 't1..p1', expected: 'a', action: 'delete' }])).toThrow('Unknown location')
+    expect(() => edit(wordDocument(p(r('a'))), [{ location: 'p0', expected: 'a', action: 'delete' }])).toThrow('Unknown location')
   })
   it('edits headers and footers by part', () => {
     const source = wordDocument(p(r('正文')), { 'word/footer1.xml': wordXml(p(r('第 1 版'))) })

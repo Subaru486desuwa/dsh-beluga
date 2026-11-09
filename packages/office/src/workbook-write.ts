@@ -10,6 +10,8 @@ import { all, buildTree, deep, dropAttr, element, escapeXml, find, getAttr, isEl
 import { cellRef, findSheet, openBook, outlineSheet, parseRange, position, sheetCells, targetError, type Book, type Cell, type OutlinedSheet, type Position } from './workbook.ts'
 
 const REPORTED_CELLS = 20
+/** Wider sheets print across the page. */
+const PORTRAIT_COLUMNS = 6
 const WORD_WIDTH = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹯＀-｠￠-￦]/gu
 
 const serialOf = (date: string): number => (Date.parse(date.replace(' ', 'T') + (date.length > 10 ? 'Z' : '')) - Date.UTC(1899, 11, 30)) / 86400000
@@ -22,6 +24,7 @@ export async function createWorkbook(input: WorkbookInput, signal: AbortSignal):
   const source = validateWorkbook(input)
   const book = new ExcelJS.Workbook()
   book.title = source.title
+  const charted = new Set((source.charts ?? []).map(chart => chart.sheet))
   for (const sheet of source.sheets) {
     const frozen = sheet.freeze ? position(sheet.freeze) : undefined
     const target = book.addWorksheet(sheet.name, frozen ? { views: [{ state: 'frozen', xSplit: frozen.column - 1, ySplit: frozen.row - 1 }] } : {})
@@ -38,6 +41,11 @@ export async function createWorkbook(input: WorkbookInput, signal: AbortSignal):
       target.getColumn(column).width = Math.min(48, Math.max(10, widest + 2))
     }
     for (const [column, width] of Object.entries(sheet.widths ?? {})) target.getColumn(column).width = width
+    // One page wide however long, so a PDF never moves columns onto later pages; charts sit to the right of the data.
+    target.pageSetup.orientation = columns > PORTRAIT_COLUMNS || charted.has(sheet.name) ? 'landscape' : 'portrait'
+    target.pageSetup.fitToPage = true
+    target.pageSetup.fitToWidth = 1
+    target.pageSetup.fitToHeight = 0
     for (const [column, format] of Object.entries(sheet.formats ?? {})) target.getColumn(column).eachCell(cell => { if (typeof cell.value !== 'string') cell.numFmt = format })
     if (sheet.header) target.getRow(1).eachCell(cell => {
       cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }

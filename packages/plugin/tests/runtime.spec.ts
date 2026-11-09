@@ -4,6 +4,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { createServer } from 'node:http'
+import sharp from 'sharp'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { LlmAdapter, type GenerateOptions, type LlmResolvedModelInfo, type ReasoningEffortId, type StreamChunk, type ToolCallId } from '@deepseek-ai/dsh-llm'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -13,10 +15,10 @@ import { PersonalStore } from '../src/host/storage.ts'
 import type { ConversationRecord } from '../src/host/records.ts'
 import type { ConversationDetail, ConversationId, MemorySummaryView } from '../src/shared/types.ts'
 import type { MemorySummaries } from '../src/host/memory-summary.ts'
-import { zipSync } from 'fflate'
+import { strFromU8, unzipSync, zipSync } from 'fflate'
 import { currentExport, fixture } from './fixtures/chatgpt.ts'
 import { pdf } from './fixtures/pdf.ts'
-import { wordDocument, workbook } from './office-fixtures.ts'
+import { budgetDeck, formDocument, wordDocument, wordParagraphs, workbook } from './office-fixtures.ts'
 import { fakeWork, workday } from './work-fixtures.ts'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 
@@ -157,6 +159,34 @@ async function settled(service: PersonalChatService, id: ConversationId, wait = 
     }
     throw new Error('Turn did not settle')
   } finally { clearTimeout(timer); controller.abort() }
+}
+/**
+ * An OpenAI-compatible inline image route on localhost. A request with tools that ends with the person's message gets the
+ * one tool call `pick` makes from that message's text; any other request gets a short answer.
+ */
+async function inlineRoute(pick: (text: string) => { name: string; arguments: object }) {
+  const requests: { messages: { role: string; content: unknown }[]; tools?: unknown[] }[] = []
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on('data', chunk => chunks.push(Buffer.from(chunk)))
+    request.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString()) as (typeof requests)[number]
+      requests.push(body)
+      const chunk = (delta: object, finish: string | null) => 'data: ' + JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'vision-test', choices: [{ index: 0, delta, finish_reason: finish }] }) + '\n\n'
+      const last = body.messages.at(-1)!
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      if (!body.tools?.length || last.role !== 'user') { response.end(chunk({ content: 'Done' }, null) + chunk({}, 'stop') + 'data: [DONE]\n\n'); return }
+      const text = (last.content as { type: string; text?: string }[]).filter(part => part.type === 'text').map(part => part.text).join('\n')
+      const call = pick(text)
+      response.write(chunk({ tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] }, null))
+      response.end(chunk({}, 'tool_calls') + 'data: [DONE]\n\n')
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  onTestFinished(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) })
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('No test address')
+  return { requests, inlineProvider: { baseURL: 'http://127.0.0.1:' + address.port + '/v1', credentialRef: 'TEST_INLINE_KEY', models: ['vision-test'] } }
 }
 async function diskText(path: string): Promise<string> {
   let text = ''
@@ -407,7 +437,7 @@ describe('plugin-owned conversations on the real LLM service', () => {
 })
 
 describe('Office artifact publication', () => {
-  const paragraphAt = (text: string, needle: string) => JSON.parse(text.split('\n').find(line => line.includes(needle))!) as { part: string; location: string; text: string }
+  const paragraphAt = (text: string, needle: string) => wordParagraphs(text).find(paragraph => paragraph.text.includes(needle))!
   const read = async (app: Awaited<ReturnType<typeof setup>>, chat: ConversationDetail, attachmentId: string) => {
     app.adapter.nextTool = { name: 'read_attachment', arguments: { attachmentId } }
     await send(app.service, chat, 'Read it')
@@ -490,6 +520,84 @@ describe('Office files in Chat', () => {
     expect(Buffer.from(pdf.base64, 'base64').subarray(0, 5).toString()).toBe('%PDF-')
     expect(app.adapter.requests.at(-1)?.tools).toEqual(expect.arrayContaining(['create_workbook', 'edit_workbook', 'read_sheet']))
   }, ENGINE_TIME)
+  it('adds charts when it creates a workbook and when it edits one', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: false })
+    const chart = { sheet: '预算', chart: 'column', categories: 'A2:A3', series: [{ values: 'B2:B3' }] }
+    const { done, result } = await turn(app, chat, 'create_workbook', { title: '预算', sheets: [{ name: '预算', rows: [['季度', '预算'], ['Q1', 100], ['Q2', { formula: 'B2*1.2' }]] }], charts: [chart] })
+    expect(result).toContain('"recalculated":true')
+    expect(result).toContain('"charts":[{"sheet":"预算","at":"D2:L18","notNumbers":[]}]')
+    const file = done.attachments[0]!
+    const { done: edited, result: second } = await turn(app, done, 'edit_workbook', { attachmentId: file.id, summary: 'Add a trend', charts: [{ ...chart, chart: 'line', title: '走势' }] })
+    expect(second).toContain('"charts":[{"sheet":"预算","title":"走势","at":"D20:L36","notNumbers":[]}]')
+    const version = edited.attachments.at(-1)!
+    expect(version.artifact).toMatchObject({ version: 2, parentId: file.id, summary: 'Add a trend' })
+    const bytes = Buffer.from((await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: version.id, original: true })).base64, 'base64')
+    const parts = unzipSync(bytes)
+    expect(Object.keys(parts).filter(name => /^xl\/charts\/chart\d+\.xml$/u.test(name)).sort()).toEqual(['xl/charts/chart1.xml', 'xl/charts/chart2.xml'])
+    expect(strFromU8(parts['xl/charts/chart1.xml']!)).toContain('<c:pt idx="1"><c:v>120</c:v></c:pt>')
+    const refused = await turn(app, edited, 'edit_workbook', { attachmentId: version.id, summary: 'Nothing' })
+    expect(refused.result).toContain('Give changes, charts or both')
+  }, ENGINE_TIME)
+  it('builds a presentation around an image the person attached, from its bytes', async () => {
+    const decks: ReturnType<typeof budgetDeck>[] = []
+    const route = await inlineRoute(text => {
+      decks.push(budgetDeck(/\[Image: 走势\.png, attachmentId=([0-9a-f-]{36})\]/u.exec(text)?.[1] ?? 'not-shown'))
+      return { name: 'create_presentation', arguments: decks.at(-1)! }
+    })
+    const app = await setup(undefined, true, { inlineProvider: route.inlineProvider })
+    app.ctx.provide('credentials', { resolve: async () => ({ value: 'fixture-not-a-real-key', source: 'test' }) } as never)
+    const chat = await app.service.create({ temporary: false })
+    const image = await upload(app, chat, '走势.png', await sharp({ create: { width: 1200, height: 800, channels: 3, background: '#4472c4' } }).png().toBuffer())
+    await send(app.service, chat, '做一份预算汇报', { model: { provider: 'personal-inline', model: 'vision-test', inline: true }, attachmentIds: [image.id] })
+    const done = await settled(app.service, chat.conversation.id, ENGINE_TIME)
+    expect(decks[0]!.slides[7]).toMatchObject({ layout: 'image', image: image.id })
+    const result = done.messages.filter(item => item.role === 'tool').at(-1)!.text
+    expect(result).toContain('"check":{"opened":true,"slides":8,')
+    expect(result).toContain('"issues":[]')
+    const file = done.attachments.at(-1)!
+    expect(file).toMatchObject({ name: '2026 年度预算回顾.pptx', artifact: { version: 1, summary: 'Created presentation' } })
+    const parts = unzipSync(Buffer.from((await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: file.id, original: true })).base64, 'base64'))
+    const media = Object.keys(parts).filter(name => name.startsWith('ppt/media/'))
+    expect(media).toHaveLength(1)
+    expect(await sharp(parts[media[0]!]!).metadata()).toMatchObject({ format: 'png', width: 1200, height: 800 })
+    const preview = await app.service.previewFile({ conversationId: chat.conversation.id, attachmentId: file.id })
+    expect(preview.pages.length).toBeGreaterThan(0)
+    const pdf = await app.service.exportPdf({ conversationId: chat.conversation.id, attachmentId: file.id })
+    expect(Buffer.from(pdf.base64, 'base64').subarray(0, 5).toString()).toBe('%PDF-')
+  }, ENGINE_TIME)
+  it('takes a slide image only from a picture attached on the branch', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: false })
+    const slides = (image: string) => ({ title: 'Deck', slides: [{ layout: 'image', title: 'Picture', image }] })
+    for (const image of ['https://example.com/a.png', '/etc/passwd']) {
+      const { result } = await turn(app, await app.service.get({ conversationId: chat.conversation.id }), 'create_presentation', slides(image))
+      expect(result).toContain('invalid-tool-arguments')
+    }
+    const { result: unattached } = await turn(app, await app.service.get({ conversationId: chat.conversation.id }), 'create_presentation', slides(randomUUID()))
+    expect(unattached).toContain('attachment-forbidden')
+    const document = await upload(app, chat, '合同.docx', wordDocument('<w:p><w:r><w:t>合同</w:t></w:r></w:p>'))
+    await send(app.service, await app.service.get({ conversationId: chat.conversation.id }), 'Attached', { attachmentIds: [document.id] })
+    const attached = await settled(app.service, chat.conversation.id)
+    const { done, result } = await turn(app, attached, 'create_presentation', slides(document.id))
+    expect(result).toContain('A slide image must be a PNG or JPEG attached to this chat')
+    expect(done.attachments.map(item => item.id)).toEqual([document.id])
+  })
+  it('keeps Temporary Chat presentations off the disk and away from the engine, yet reports text that does not fit', async () => {
+    const app = await setup(undefined, true)
+    const scratch = await mkdtemp(join(tmpdir(), 'temporary-office-'))
+    process.env.TMPDIR = scratch
+    onTestFinished(async () => { delete process.env.TMPDIR; await rm(scratch, { recursive: true, force: true }) })
+    const chat = await app.service.create({ temporary: true })
+    const long = 'TEMP_DECK_CONTENT is long enough that eight of these overflow the body of a slide at sixteen points. '.repeat(3)
+    const { done, result } = await turn(app, chat, 'create_presentation', { title: 'TEMP_DECK_SENTINEL', slides: [{ layout: 'bullets', title: 'Too much', bullets: Array.from({ length: 8 }, () => long) }] })
+    expect(result).toContain('"opened":false')
+    expect(result).toContain('"issues":[{"slide":1,"region":"bullets","issue":"overflow"}]')
+    expect(done.attachments[0]).toMatchObject({ name: 'TEMP_DECK_SENTINEL.pptx', artifact: { version: 1 } })
+    expect(await readdir(join(app.path, 'attachments'))).toEqual([])
+    expect(await diskText(app.path)).not.toContain('TEMP_DECK')
+    expect(await readdir(scratch)).toEqual([])
+  })
   it('edits an uploaded workbook into a new version and leaves the upload alone', async () => {
     const app = await setup(undefined, true)
     const chat = await app.service.create({ temporary: false })
@@ -553,6 +661,39 @@ describe('Office files in Chat', () => {
     expect(stale.result).toContain('金额 100 元')
     expect(app.adapter.requests.at(-1)?.tools).toEqual(expect.arrayContaining(['edit_document', 'fill_template']))
     expect(app.adapter.requests.at(-1)?.tools).not.toContain('revise_document')
+  }, ENGINE_TIME)
+  it('reads a full-size application form, looks up a page and fills the form in one turn', async () => {
+    const app = await setup(undefined, true)
+    // A person's background the size of a real memory summary, and one project page to look up.
+    await app.service.updateProfile({ expectedRevision: 0, background: '背景'.repeat(1000), instructions: '', autoSaveLowRisk: true, referenceChats: true })
+    app.ctx.provide('web', { search: async () => ({ sources: [], truncated: false }), fetch: async (request: { url: string }) => ({ url: request.url, statusCode: 200, body: { kind: 'text', text: '项目说明'.repeat(1700) }, truncated: false }) })
+    const chat = await app.service.create({ temporary: false })
+    const form = await upload(app, chat, '申请表.docx', formDocument())
+    let read = ''
+    let step: 'read' | 'lookup' | 'fill' = 'read'
+    app.adapter.follow = result => {
+      if (result === undefined) return { name: 'read_attachment', arguments: { attachmentId: form.id } }
+      if (step === 'read') {
+        const page = JSON.parse(result) as { text?: string; nextOffset?: number }
+        read += page.text ?? ''
+        if (page.nextOffset !== undefined) return { name: 'read_attachment', arguments: { attachmentId: form.id, offset: page.nextOffset } }
+        step = 'lookup'
+        return { name: 'web_fetch', arguments: { url: 'https://github.com/example/project' } }
+      }
+      if (step !== 'lookup') return undefined
+      step = 'fill'
+      const empty = wordParagraphs(read).filter(paragraph => paragraph.location.startsWith('t') && !paragraph.text)
+      return { name: 'edit_document', arguments: { attachmentId: form.id, summary: 'Filled the form', changes: empty.map(({ part, location }) => ({ part, location, expected: '', action: 'replace', text: '已填写' })) } }
+    }
+    await send(app.service, await app.service.get({ conversationId: chat.conversation.id }), 'Fill in this form', { attachmentIds: [form.id], web: true })
+    const done = await settled(app.service, chat.conversation.id, ENGINE_TIME)
+    expect(done.error).toBeUndefined()
+    expect(wordParagraphs(read).at(-1)?.text).toBe('表19行6列4第二段说明')
+    expect(done.messages.at(-1)?.text).toBe('Tool completed.')
+    const result = done.attachments.at(-1)!
+    expect(result.artifact).toMatchObject({ version: 2, parentId: form.id })
+    const bytes = Buffer.from((await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: result.id, original: true })).base64, 'base64')
+    expect(new TextDecoder().decode(unzipSync(bytes)['word/document.xml']).split('已填写')).toHaveLength(9)
   }, ENGINE_TIME)
   it('keeps files to their own chat and branch', async () => {
     const app = await setup(undefined, true)

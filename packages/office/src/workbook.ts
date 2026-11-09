@@ -11,6 +11,8 @@ const MAX_COLUMN = 16384
 const DAY_MS = 86400000
 /** Built-in number formats that mean a date or time, including the East Asian ones. */
 const DATE_FORMATS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58])
+/** Built-in number formats by id, as Excel reads them; dates, times, currency and accounting are left out, since they follow the locale. */
+const BUILT_IN_FORMATS: Readonly<Record<number, string>> = { 0: 'General', 1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00', 9: '0%', 10: '0.00%', 11: '0.00E+00', 12: '# ?/?', 13: '# ??/??', 37: '#,##0_);(#,##0)', 38: '#,##0_);[Red](#,##0)', 39: '#,##0.00_);(#,##0.00)', 40: '#,##0.00_);[Red](#,##0.00)', 48: '##0.0E+0', 49: '@' }
 
 export interface Position { readonly row: number; readonly column: number }
 export const targetError = (message: string): PersonalChatError => new PersonalChatError('workbook-target', message)
@@ -61,6 +63,8 @@ export interface Cell extends Position {
   readonly sharedAnchor?: boolean
   /** Set on a cell inside a shared or array formula. */
   readonly formulaKind?: string
+  /** Index of the cell's style, when it is not the default one. */
+  readonly style?: number
   readonly value: SheetCell
 }
 export interface SheetEntry { readonly name: string; readonly state: string; readonly part: string }
@@ -69,17 +73,24 @@ export interface Book {
   readonly sheets: readonly SheetEntry[]
   readonly strings: readonly string[]
   readonly dateStyles: ReadonlySet<number>
+  /** Number format code of each cell style, by index; a style missing here is General. */
+  readonly formats: readonly string[]
   readonly date1904: boolean
 }
-function dateStylesOf(office: OfficePackage): Set<number> {
-  const styles = new Set<number>()
-  if (!office.has('xl/styles.xml')) return styles
+function stylesOf(office: OfficePackage): Pick<Book, 'dateStyles' | 'formats'> {
+  const dateStyles = new Set<number>()
+  const formats: string[] = []
+  if (!office.has('xl/styles.xml')) return { dateStyles, formats }
   const root = office.xml('xl/styles.xml')
   const custom = new Map(descendants(root, 'numFmt').map(format => [Number(attr(format, 'numFmtId')), attr(format, 'formatCode')]))
   const isDate = (id: number): boolean => DATE_FORMATS.has(id) || /[ymdhs]/iu.test((custom.get(id) ?? '').replace(/"[^"]*"|\[[^\]]*\]|\\./gu, ''))
-  const formats = descendants(root, 'cellXfs')[0]
-  children(formats ?? root, 'xf').forEach((format, index) => { if (formats && isDate(Number(attr(format, 'numFmtId')))) styles.add(index) })
-  return styles
+  const styles = descendants(root, 'cellXfs')[0]
+  if (styles) children(styles, 'xf').forEach((style, index) => {
+    const id = Number(attr(style, 'numFmtId'))
+    if (isDate(id)) dateStyles.add(index)
+    formats[index] = custom.get(id) ?? BUILT_IN_FORMATS[id] ?? 'General'
+  })
+  return { dateStyles, formats }
 }
 export function openBook(office: OfficePackage): Book {
   const main = 'xl/workbook.xml'
@@ -90,7 +101,7 @@ export function openBook(office: OfficePackage): Book {
   return {
     office, sheets,
     strings: office.has('xl/sharedStrings.xml') ? descendants(office.xml('xl/sharedStrings.xml'), 'si').map(content) : [],
-    dateStyles: dateStylesOf(office),
+    ...stylesOf(office),
     date1904: flag ? ['1', 'true'].includes(attr(flag, 'date1904')) : false,
   }
 }
@@ -131,7 +142,8 @@ function readCell(node: Node, at: Position, book: Book, shared: Map<string, { fo
       source = master && translateFormula(master.formula, master.origin, at)
     }
   }
-  return { ...at, ref: cellRef(at), type, raw, value: cellValue(type, raw, Number(attr(node, 's')) || 0, book), ...(formula ? { formula: source ?? '' } : {}), ...(sharedAnchor ? { sharedAnchor } : {}), ...(kind ? { formulaKind: kind } : {}) }
+  const style = Number(attr(node, 's')) || 0
+  return { ...at, ref: cellRef(at), type, raw, value: cellValue(type, raw, style, book), ...(formula ? { formula: source ?? '' } : {}), ...(sharedAnchor ? { sharedAnchor } : {}), ...(kind ? { formulaKind: kind } : {}), ...(style ? { style } : {}) }
 }
 export function sheetCells(book: Book, sheet: SheetEntry): Cell[] {
   const cells: Cell[] = []

@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { PersonalChatError } from './archive.ts'
+import { clean } from './documents.ts'
 
-const clean = (value: string) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(value)
 const text = z.string().max(32767).refine(clean, 'XML control characters are not allowed')
 /** Functions that fetch a URL or start a program when a workbook opens. Files store newer ones with a `_xlfn.` prefix. */
 const REACHING_FUNCTION = /(?<![\p{L}\p{N}_])(?:WEBSERVICE|IMAGE|RTD|DDE|CALL|REGISTER(?:\.ID)?)\s*\(/iu
@@ -28,17 +28,41 @@ const sheet = z.object({
   widths: z.record(z.string().regex(/^[A-Z]{1,3}$/u), z.number().min(1).max(120)).optional(),
   formats: z.record(z.string().regex(/^[A-Z]{1,3}$/u), z.string().min(1).max(100)).optional(),
 }).strict()
-export const workbookInput = z.object({ title: z.string().trim().min(1).max(200).refine(clean), sheets: z.array(sheet).min(1).max(32) }).strict()
+const range = z.string().regex(/^\$?[A-Z]{1,3}\$?[1-9]\d{0,6}(?::\$?[A-Z]{1,3}\$?[1-9]\d{0,6})?$/u, 'Use a range such as B2:B13')
+const label = z.string().trim().min(1).max(200).refine(clean, 'XML control characters are not allowed')
+/** A native chart of cells on one sheet. Its series read the cells, so it follows the data. */
+export const workbookChart = z.object({
+  sheet: z.string().min(1).max(31),
+  chart: z.enum(['column', 'bar', 'line', 'pie']),
+  title: label.optional(),
+  categories: range,
+  series: z.array(z.object({ values: range, name: label.optional() }).strict()).min(1).max(12),
+}).strict().refine(value => value.chart !== 'pie' || value.series.length === 1, 'A pie chart takes one series')
+export type WorkbookChart = z.infer<typeof workbookChart>
+const charts = z.array(workbookChart).max(16).optional()
+export const workbookInput = z.object({ title: z.string().trim().min(1).max(200).refine(clean), sheets: z.array(sheet).min(1).max(32), charts }).strict()
 export type WorkbookInput = z.infer<typeof workbookInput>
 export function validateWorkbook(input: unknown): WorkbookInput {
   if (Buffer.byteLength(JSON.stringify(input)) > 1024 * 1024) throw new PersonalChatError('document-limit', 'Workbook source exceeds 1 MiB')
   const value = workbookInput.parse(input)
   if (new Set(value.sheets.map(item => item.name.toLowerCase())).size !== value.sheets.length) throw new PersonalChatError('workbook-target', 'Sheet names must be unique')
+  const names = value.sheets.map(item => item.name)
+  for (const chart of value.charts ?? []) if (!names.includes(chart.sheet)) throw new PersonalChatError('workbook-target', 'A chart names sheet ' + JSON.stringify(chart.sheet) + '; the sheets are ' + names.join(', '))
   return value
 }
 export const cellChange = z.object({ sheet: z.string().min(1), cell: z.string().regex(/^[A-Z]{1,3}[1-9]\d*$/u), value: workbookCell }).strict()
 export type CellChange = z.infer<typeof cellChange>
-export const workbookEdit = z.object({ attachmentId: z.string().uuid(), summary: z.string().trim().min(1).max(500), changes: z.array(cellChange).min(1).max(1000) }).strict()
+export const workbookEdit = z.object({ attachmentId: z.string().uuid(), summary: z.string().trim().min(1).max(500), changes: z.array(cellChange).max(1000).default([]), charts })
+  .strict().refine(value => value.changes.length > 0 || !!value.charts?.length, 'Give changes, charts or both')
+/** Where a new chart went, and what in its data it cannot draw. */
+export interface ChartCheck {
+  readonly sheet: string
+  readonly title?: string
+  /** The cells the chart covers. */
+  readonly at: string
+  /** Value cells holding text, a boolean or an error, which the chart leaves out; first ones only. */
+  readonly notNumbers: readonly string[]
+}
 /** What opening a finished workbook will show, so a reply can stand behind its numbers. */
 export interface WorkbookCheck {
   readonly recalculated: boolean
@@ -50,4 +74,6 @@ export interface WorkbookCheck {
   readonly errorCount: number
   /** Cells using a function the engine lacks; they keep their saved value. */
   readonly unverified: readonly { readonly sheet: string; readonly cell: string }[]
+  /** Charts this call added. */
+  readonly charts?: readonly ChartCheck[]
 }

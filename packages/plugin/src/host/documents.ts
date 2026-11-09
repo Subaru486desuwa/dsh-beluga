@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import { PersonalChatError } from './archive.ts'
 
-const clean = (value: string) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(value)
+/** Whether text can go into XML: it holds no control character other than tab and line breaks. */
+export const clean = (value: string) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(value)
 const text = z.string().max(20000).refine(clean, 'XML control characters are not allowed')
 const chartText = text.pipe(z.string().min(1).max(200))
 const documentBlock = z.discriminatedUnion('kind', [

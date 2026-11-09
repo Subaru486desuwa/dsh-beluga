@@ -9,9 +9,10 @@ import type { Titles } from './titles.ts'
 import { contextWindow } from './context-window.ts'
 import { documentEdit, templateFill, validateDocument } from './documents.ts'
 import { officeFormat, type OfficeEngine } from './office-contract.ts'
+import { validatePresentation, type PresentationCheck, type SlideImage } from './presentations.ts'
 import { boundedResult, toolSchemas } from './tools.ts'
 import { parseTodos, TODO_TOOL } from './todos.ts'
-import { validateWorkbook, workbookEdit } from './workbooks.ts'
+import { validateWorkbook, workbookEdit, type WorkbookChart, type WorkbookCheck } from './workbooks.ts'
 import type { Apps } from './apps.ts'
 import type { AssetRepository } from './assets.ts'
 import type { Config } from './config.ts'
@@ -88,7 +89,8 @@ export class Turns {
     if (attachmentIds.length > 16 || new Set(attachmentIds).size !== attachmentIds.length) throw new PersonalChatError('attachment-limit', 'Attach at most 16 distinct files')
     const attachments = attachmentIds.map(id => this.chats.ownedAsset(record, id))
     if (attachments.some(item => item.image) && !model.inline) throw new PersonalChatError('image-route-required', 'Select the inline image model before sending images')
-    const handles = attachments.map(item => item.image ? '[Image: ' + item.name + ']' : '[Uploaded document: ' + item.name + ', attachmentId=' + item.id + '; use read_attachment to read it.]')
+    // An image's id lets a tool, such as create_presentation, place the very file the model sees.
+    const handles = attachments.map(item => item.image ? '[Image: ' + item.name + ', attachmentId=' + item.id + ']' : '[Uploaded document: ' + item.name + ', attachmentId=' + item.id + '; use read_attachment to read it.]')
     // The pick travels with the person's words, where it stays in the history the model reads.
     if (chosen.web) handles.push('[The user turned on web search for this message: search the web before answering.]')
     const message = createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: [content, ...handles].filter(Boolean).join('\n') }] })
@@ -150,10 +152,22 @@ export class Turns {
         const { bytes, unfilled } = await office.fillTemplate(await this.assets.read(file, record.conversation.temporary), args.values, this.config.maxAttachmentBytes, signal)
         return { ...this.stage(record, turn, call.id, file.name, bytes, file, args.summary), unfilled, check: await office.checkDocument(bytes, file.name, !record.conversation.temporary, signal) }
       }
+      case 'create_presentation': {
+        const office = this.officeEngine()
+        const source = validatePresentation(raw)
+        const images = new Map<string, SlideImage>()
+        for (const slide of source.slides) if (slide.layout === 'image' && !images.has(slide.image)) images.set(slide.image, await this.slideImage(record, turn, slide.image, signal))
+        const { bytes, issues } = await office.renderPresentation(source, images, signal)
+        const name = fileName(source.title, 'presentation') + '.pptx'
+        const opened = await office.checkDocument(bytes, name, !record.conversation.temporary, signal)
+        const check: PresentationCheck = { ...(opened.opened ? { opened: true, slides: opened.pages, missingFonts: opened.missingFonts } : opened), issues }
+        return { ...this.stage(record, turn, call.id, name, bytes, undefined, 'Created presentation'), check }
+      }
       case 'create_workbook': {
         const office = this.officeEngine()
         const source = validateWorkbook(raw)
-        const { bytes, check } = await office.settleWorkbook(await office.createWorkbook(source, signal), this.config.maxAttachmentBytes, !record.conversation.temporary, signal)
+        const settled = await office.settleWorkbook(await office.createWorkbook(source, signal), this.config.maxAttachmentBytes, !record.conversation.temporary, signal)
+        const { bytes, check } = this.charted(office, settled, source.charts, signal)
         return { ...this.stage(record, turn, call.id, fileName(source.title, 'workbook') + '.xlsx', bytes, undefined, 'Created workbook'), check }
       }
       case 'edit_workbook': {
@@ -161,7 +175,7 @@ export class Turns {
         const args = workbookEdit.parse(raw)
         const file = this.officeFile(record, turn, args.attachmentId, 'xlsx')
         const edited = office.editWorkbook(await this.assets.read(file, record.conversation.temporary), args.changes, this.config.maxAttachmentBytes, signal)
-        const { bytes, check } = await office.settleWorkbook(edited, this.config.maxAttachmentBytes, !record.conversation.temporary, signal)
+        const { bytes, check } = this.charted(office, await office.settleWorkbook(edited, this.config.maxAttachmentBytes, !record.conversation.temporary, signal), args.charts, signal)
         return { ...this.stage(record, turn, call.id, file.name, bytes, file, args.summary), check }
       }
       case 'read_sheet': {
@@ -247,6 +261,18 @@ export class Turns {
     const office = this.ctx.get('personalChatOffice')
     if (!office) throw new PersonalChatError('office-not-installed', 'Install and enable the optional Office extension explicitly first')
     return office
+  }
+  /** Charts come after settling, so the data they save is the calculated one. */
+  private charted(office: OfficeEngine, settled: { readonly bytes: Uint8Array; readonly check: WorkbookCheck }, charts: readonly WorkbookChart[] | undefined, signal: AbortSignal): { readonly bytes: Uint8Array; readonly check: WorkbookCheck } {
+    if (!charts?.length) return settled
+    const added = office.addCharts(settled.bytes, charts, this.config.maxAttachmentBytes, signal)
+    return { bytes: added.bytes, check: { ...settled.check, charts: added.charts } }
+  }
+  /** A PNG or JPEG the person attached on this branch, as a slide shows it. */
+  private async slideImage(record: ConversationRecord, turn: RunningTurn, id: string, signal: AbortSignal): Promise<SlideImage> {
+    const file = this.attached(record, turn, id)
+    if (!file.image || !['image/png', 'image/jpeg'].includes(file.mediaType)) throw new PersonalChatError('attachment-format', 'A slide image must be a PNG or JPEG attached to this chat')
+    return this.assets.picture(file, record.conversation.temporary, signal)
   }
   private officeFile(record: ConversationRecord, turn: RunningTurn, id: string, format: 'docx' | 'xlsx'): ChatAttachment {
     const file = this.attached(record, turn, id)

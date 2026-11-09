@@ -21,7 +21,7 @@ type T = TranslateNS<'personalChat'>
 /** What a running tool is doing, in words; a tool not listed is just "working". */
 const TOOL_STATUS: Readonly<Record<string, PersonalChatKey>> = {
   web_search: 'toolWebSearch', web_fetch: 'toolWebFetch', create_document: 'toolDocument', edit_document: 'toolDocument', fill_template: 'toolDocument',
-  create_workbook: 'toolWorkbook', edit_workbook: 'toolWorkbook', read_sheet: 'toolReadFile', read_attachment: 'toolReadFile',
+  create_workbook: 'toolWorkbook', edit_workbook: 'toolWorkbook', create_presentation: 'toolPresentation', read_sheet: 'toolReadFile', read_attachment: 'toolReadFile',
   memory_propose: 'toolMemory', memory_recall: 'toolMemory', search_chats: 'toolSearchChats', todo_write: 'toolPlanning',
 }
 const toolStatus = (tool: string): PersonalChatKey => TOOL_STATUS[tool] ?? 'toolWorking'

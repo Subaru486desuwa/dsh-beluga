@@ -1,8 +1,17 @@
 /** Read OOXML as bounded, inert source records. */
 import { officeFormat } from 'dsh-beluga'
 import type { AttachmentText } from 'dsh-beluga'
-import { OfficePackage, attr, content, descendants, fail, relationshipId, type Node } from './package.ts'
+import { OfficePackage, attr, children, content, descendants, fail, relationshipId, type Node } from './package.ts'
+import { shortStep } from './locations.ts'
 import { workbookRecords } from './workbook.ts'
+
+/** Locations repeat on every paragraph, so they stay short: framing once took four fifths of a form's text. */
+const WORD_LEGEND = 'Word paragraphs, one per line: location, [style] when set, then the text as a JSON string. A "part" line names the file part of the paragraphs below it. Locations count paragraphs (p), tables (t), rows (r) and cells (c) from the start of the part, so t2.r3.c1.p1 is paragraph 1 of cell 1 in row 3 of table 2. Give edit_document the part and location as written here.'
+/** The element whose children are the part's paragraphs and tables: the body of the document, or the header or footer itself. */
+function contentRoot(tree: Node): Node {
+  const root = tree.children.find(node => !node.tag.startsWith('?') && !node.tag.startsWith('#')) ?? fail('Word part has no root element')
+  return children(root, 'body')[0] ?? root
+}
 
 export function extractOfficeText(bytes: Uint8Array, name: string, limit: number, signal: AbortSignal): AttachmentText {
   signal.throwIfAborted()
@@ -15,18 +24,20 @@ export function extractOfficeText(bytes: Uint8Array, name: string, limit: number
   if (format === 'docx') {
     const main = 'word/document.xml'
     office.xml(main)
+    output.push(WORD_LEGEND)
     for (const part of [main, ...office.names().filter(key => /^word\/(header|footer)\d+\.xml$/u.test(key)).sort()]) {
+      output.push('part ' + part)
       const walk = (parent: Node, path: string) => {
         const counts: Record<string, number> = {}
         for (const node of parent.children) {
           counts[node.tag] = (counts[node.tag] ?? 0) + 1
-          const label = ({ p: 'paragraph', tbl: 'table', tr: 'row', tc: 'cell' } as Record<string, string>)[node.tag] ?? node.tag
-          const location = path + '/' + label + '[' + counts[node.tag] + ']'
-          if (node.tag === 'p') emit({ part, location, style: attr(descendants(node, 'pStyle')[0] ?? node, 'val'), text: content(node) })
-          else walk(node, location)
+          const location = (path ? path + '.' : '') + shortStep(node.tag, counts[node.tag])
+          if (node.tag !== 'p') { walk(node, location); continue }
+          const style = attr(descendants(node, 'pStyle')[0] ?? node, 'val')
+          output.push(location + (style ? ' [' + style + ']' : '') + ' ' + JSON.stringify(content(node)))
         }
       }
-      walk(office.xml(part), '')
+      walk(contentRoot(office.xml(part)), '')
     }
   } else if (format === 'xlsx') {
     for (const record of workbookRecords(office)) emit(record)
@@ -34,7 +45,9 @@ export function extractOfficeText(bytes: Uint8Array, name: string, limit: number
     const main = 'ppt/presentation.xml'
     const rels = office.relationships(main)
     let slide = 0
-    for (const item of descendants(office.xml(main), 'sldId')) {
+    // Only the presentation's own list: a deck with sections lists its slides again in an extension, without relationships.
+    const slides = children(office.xml(main), 'presentation').flatMap(root => children(root, 'sldIdLst')).flatMap(list => children(list, 'sldId'))
+    for (const item of slides) {
       const part = office.target(main, rels.find(rel => attr(rel, 'Id') === relationshipId(item)))
       slide++
       emit({ slide, part })
