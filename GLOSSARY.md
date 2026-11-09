@@ -85,12 +85,20 @@ _Avoid_: 隐私信息、PII
 ## 应用
 
 **App（应用）**:
-回合中可供模型使用的服务，目前是网页搜索和 Work Records。用户在设置的“应用”页决定模型能否在需要时自动使用它；关闭后，只有从 + 菜单选了它的消息才会用。
+回合中可供模型使用的服务，目前是网页搜索、GitHub 和 Work Records。用户在设置的“应用”页决定模型能否在需要时自动使用它；关闭后，只有从 + 菜单选了它的消息才会用。
 _Avoid_: connector、连接器、integration
 
 **Work Records（Work 记录）**:
 一个 App：只读地搜索和读取用户允许的 Workspace 里的 Session。读到的内容是工具输出，不算用户说过的话，也不写进个人记忆。
 _Avoid_: Work 历史、session history
+
+**Pending Action（待确认的操作）**:
+模型请求的一次 GitHub 改动，执行前停在回合里，等用户允许或拒绝。界面列出操作、目标和将发送的内容。停止回合会结束等待，且不执行。
+_Avoid_: permission request、授权请求、审批单
+
+**Approval Level（确认级别）**:
+哪些 GitHub 改动要先成为 Pending Action：每次都问、只问高风险、都不问。读取从不询问。低风险指容易看到和撤销的改动：评论、议题、分支和拉取请求；其余改动，包括 Beluga 不认识的，都算高风险。
+_Avoid_: 权限、permission mode、allow list
 
 ## Work
 

@@ -7,7 +7,8 @@ import { todosOf } from './todos.ts'
 import type { Config } from './config.ts'
 import type { PersonalDomain } from './storage.ts'
 import type { ModelRef } from '../shared/models.ts'
-import type { ArchiveRevisionId, ArchiveSelection, BranchId, ChatActivity, ChatAttachment, ChatUpdate, Conversation, ConversationDetail, ConversationId, LiveTurn, MemoryId, PersonalChange, WebSource } from '../shared/types.ts'
+import type { GitHubTool } from './github-contract.ts'
+import type { ArchiveRevisionId, ArchiveSelection, BranchId, ChatActivity, ChatAttachment, ChatUpdate, Conversation, ConversationDetail, ConversationId, LiveTurn, MemoryId, PendingAction, PersonalChange, WebSource } from '../shared/types.ts'
 
 /** Bounds the parsed imports held in memory, counted in nodes. */
 const CACHED_ARCHIVE_NODES = 20000
@@ -24,12 +25,18 @@ export interface RunningTurn {
   /** Saved Memories given to this turn as context, noted on its reply. */
   recalled: readonly MemoryId[]
   pendingDocument?: { callId: string; id: string; name: string; bytes: Uint8Array; artifact: NonNullable<ChatAttachment["artifact"]> }
+  /** The GitHub action waiting for the person, and how their answer reaches the turn. */
+  approval?: { readonly action: PendingAction; decide(allow: boolean): void }
+  /** GitHub as this turn found it: the account and the tools it offers. */
+  github?: { readonly account: string; readonly tools: readonly GitHubTool[] }
   readonly id: string
   readonly branchId: BranchId
   readonly userId: string
   readonly model: ModelRef
   /** What the person picked for this message from the tools menu. */
-  readonly chosen: { readonly web: boolean }
+  readonly chosen: { readonly web: boolean; readonly github: boolean }
+  /** GitHub tools the model has loaded on this branch, by the server's names. */
+  readonly githubTools: Set<string>
   readonly controller: AbortController
   readonly sources: WebSource[]
   text: string
@@ -109,7 +116,7 @@ export class Conversations {
    */
   activity(id: ConversationId, marks: ListMarks): ChatActivity {
     const turn = this.running.get(id)
-    if (turn) return 'running'
+    if (turn) return turn.approval ? 'waiting' : 'running'
     return marks.proposing.has(id) ? 'waiting' : marks.unseen.has(id) ? 'replied' : 'idle'
   }
   /** Record that a chat's last turn ended while no one had it open, or that someone opened it, and tell the list. */
@@ -179,7 +186,7 @@ export class Conversations {
         ...(entry.referenced ? { referenced: entry.referenced.flatMap(conversationId => { const title = titles.get(conversationId); return title === undefined ? [] : [{ conversationId, title }] }) } : {}), ...(entry.work ? { work: entry.work } : {}) }
     })
     const running = this.running.get(conversation.id)
-    const live: LiveTurn | undefined = running && running.branchId === branch?.id ? { id: running.id, branchId: running.branchId, text: running.text, reasoning: running.reasoning, stepElapsedMs: Math.max(0, Date.now() - running.stepStarted), ...(running.tool ? { tool: running.tool } : {}) } : undefined
+    const live: LiveTurn | undefined = running && running.branchId === branch?.id ? { id: running.id, branchId: running.branchId, text: running.text, reasoning: running.reasoning, stepElapsedMs: Math.max(0, Date.now() - running.stepStarted), ...(running.tool ? { tool: running.tool } : {}), ...(running.approval ? { approval: running.approval.action } : {}) } : undefined
     return { conversation, messages, attachments: record.attachments, ...(live ? { live } : {}), ...(record.model ? { model: record.model } : {}), ...((record.error || (record.running && !running)) ? { error: record.error ?? 'interrupted' } : {}), ...(conversation.selectedArchive ? { archive: archiveView(this.readArchive(conversation.selectedArchive.revisionId), conversation.selectedArchive.revisionId, conversation.selectedArchive.nodeId) } : {}) }
   }
   idle(id: ConversationId): void {

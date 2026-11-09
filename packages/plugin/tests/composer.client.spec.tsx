@@ -7,7 +7,7 @@ import { ModelPicker } from '../src/client/ModelPicker.tsx'
 import type { PersonalState } from '../src/client/model.ts'
 import type { PersonalCommands } from '../src/client/contract.ts'
 import type { ModelChoice } from '../src/shared/models.ts'
-import type { AppsView, CandidateId, ChatMessageView, ConversationDetail, ConversationId, MemoryCandidate, MemoryId, MemoryState, WorkSessionRef } from '../src/shared/types.ts'
+import type { AppsView, CandidateId, ChatMessageView, ConversationDetail, ConversationId, MemoryCandidate, MemoryId, MemoryState, PendingAction, WorkSessionRef } from '../src/shared/types.ts'
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => (await import('./primitives-mock.tsx')).primitives())
 afterEach(cleanup)
 const t = ((key: string, params?: object) => key + (params ? ' ' + JSON.stringify(params) : '')) as never
@@ -90,14 +90,31 @@ describe('composer', () => {
   })
 })
 
-const apps = (web = true): AppsView => ({ web: { available: web, auto: true }, work: { memoryAvailable: false, recordsAvailable: false, memory: false, records: false, workspaces: [] } })
+const apps = (github: Partial<AppsView['github']>, web = true): AppsView => ({ web: { available: web, auto: true }, github: { installed: true, auto: true, approval: 'ask', ...github }, work: { memoryAvailable: false, recordsAvailable: false, memory: false, records: false, workspaces: [] } })
 describe('tools menu', () => {
   const open = () => { fireEvent.click(screen.getByRole('button', { name: 'tools' })); return screen.getAllByRole('menuitem').map(item => item.textContent) }
-  it('offers web search only when Harness has a web provider', () => {
-    const view = render(<Harness state={composerState({ apps: apps() })} commands={{} as PersonalCommands} />)
-    expect(open()).toEqual(['addFiles', 'webSearch'])
+  it('offers GitHub once an account is connected, and shows a picked one as a chip', () => {
+    const setGitHub = vi.fn()
+    const commands = { setGitHub } as unknown as PersonalCommands
+    const connected = apps({ account: 'octo', source: 'token' })
+    const { rerender } = render(<Harness state={composerState({ apps: connected })} commands={commands} />)
+    expect(open()).toEqual(['addFiles', 'webSearch', 'github'])
+    fireEvent.click(screen.getByRole('menuitem', { name: 'github' }))
+    expect(setGitHub).toHaveBeenCalledWith(true)
+    rerender(<Harness state={composerState({ github: true, apps: connected })} commands={commands} />)
+    fireEvent.click(screen.getByRole('button', { name: 'removeGitHub' }))
+    expect(setGitHub).toHaveBeenLastCalledWith(false)
+  })
+  it('leads to the Apps settings before an account is connected, and leaves out what is not installed', () => {
+    const openSettings = vi.fn(async () => {})
+    const commands = { openSettings } as unknown as PersonalCommands
+    const view = render(<Harness state={composerState({ github: true, apps: apps({}) })} commands={commands} />)
+    expect(open()).toEqual(['addFiles', 'webSearch', 'connectGitHub'])
+    expect(screen.queryByRole('button', { name: 'removeGitHub' })).toBeNull()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'connectGitHub' }))
+    expect(openSettings).toHaveBeenCalledWith('apps')
     view.unmount()
-    render(<Harness state={composerState({ apps: apps(false) })} commands={{} as PersonalCommands} />)
+    render(<Harness state={composerState({ apps: apps({ installed: false }, false) })} commands={commands} />)
     expect(open()).toEqual(['addFiles'])
   })
 })
@@ -241,6 +258,30 @@ describe('what a reply proposed to memory and drew on', () => {
     expect(screen.queryByRole('region', { name: 'memoryTitle' })).toBeNull()
     expect(screen.queryByText('Lives by the sea')).toBeNull()
     expect(screen.getByRole('link', { name: 'Tea guide' })).toBeTruthy()
+  })
+})
+
+describe('an action waiting for the person', () => {
+  const action: PendingAction = { id: 'act', tool: 'merge_pull_request', risk: 'high', target: 'o/r#3', details: '{\n  "pullNumber": 3\n}' }
+  const live = (extra: object) => ({ id: 'turn', branchId: 'b' as never, text: '', reasoning: '', tool: 'github__merge_pull_request', ...extra })
+  it('shows what will be sent in place of the status, and passes the answer on', () => {
+    const decideAction = vi.fn(async () => true)
+    render(<ChatMessages state={thread([message('u', 'user', 'Merge it')], { live: live({ approval: action }) })} commands={{ decideAction } as unknown as PersonalCommands} t={t} />)
+    const card = screen.getByRole('region', { name: 'approvalTitle' })
+    expect(within(card).getByText('riskHigh').getAttribute('data-risk')).toBe('high')
+    expect(within(card).getByText('merge pull request')).toBeTruthy()
+    expect(within(card).getByText('o/r#3')).toBeTruthy()
+    expect(within(card).getByText(/"pullNumber": 3/u)).toBeTruthy()
+    expect(screen.queryByText('toolGitHub')).toBeNull()
+    expect(screen.queryByRole('status', { name: 'loading' })).toBeNull()
+    fireEvent.click(within(card).getByRole('button', { name: 'decline' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'allow' }))
+    expect(decideAction.mock.calls).toEqual([['act', false], ['act', true]])
+  })
+  it('says GitHub is working while a GitHub tool runs', () => {
+    render(<ChatMessages state={thread([message('u', 'user', 'List them')], { live: live({ tool: 'github__list_issues' }) })} commands={{} as PersonalCommands} t={t} />)
+    expect(screen.getByText('toolGitHub')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'approvalTitle' })).toBeNull()
   })
 })
 

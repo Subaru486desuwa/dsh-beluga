@@ -29,6 +29,7 @@ export interface PersonalCommands {
   /** @param effort - an effort the selected route offers, or undefined for the route's default. */
   chooseEffort(effort: string | undefined): void
   setWeb(web: boolean): void
+  setGitHub(github: boolean): void
   updateApps(change: AppsChange): Promise<boolean>
   /** Write a brief from the open chat and put it in a new Work session's composer in `workspace`, for the person to send. */
   handOff(workspace: WorkspaceRef): Promise<boolean>
@@ -36,6 +37,11 @@ export interface PersonalCommands {
   openWork(sessionId: WorkSessionRef): void
   /** Read apps and Work workspaces again. */
   refreshApps(): Promise<boolean>
+  /** @param source - a pasted token, or this computer's GitHub CLI sign-in. */
+  connectGitHub(source: { readonly token: string } | { readonly cli: true }): Promise<boolean>
+  disconnectGitHub(): Promise<boolean>
+  /** Answer the GitHub action the running reply waits on. */
+  decideAction(actionId: string, allow: boolean): Promise<boolean>
   branch(messageId: string, action: 'edit' | 'regenerate' | 'fork', text?: string): Promise<boolean>
   removeAttachment(id: string): Promise<boolean>
   upload(file: File): Promise<ChatAttachment | undefined>

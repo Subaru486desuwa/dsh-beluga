@@ -6,7 +6,7 @@ DeepSeek Harness 的个人 Chat 插件，名字来自最爱“说话”的鲸鱼
 
 用一个插件，在 Harness 的 Work 旁增加个人 Chat、ChatGPT 历史导入、用户画像和可控记忆。Chat 不要求选择仓库，也不会把个人聊天伪装成 Work 执行记录。
 
-Chat 插件基础安装仅提供 **Chat 与 Memory**（含历史导入等已有能力）。**Word／PPT／Excel 办公扩展推荐但不预装**：必须由用户明确同意后，单独下载并启用 `dsh-beluga-office`。基础包不依赖办公包，也不包含其文件处理库；模型和上传文件均不能触发自动安装。
+Chat 插件基础安装仅提供 **Chat 与 Memory**（含历史导入等已有能力）。**Word／PPT／Excel 办公扩展推荐但不预装**：必须由用户明确同意后，单独下载并启用 `dsh-beluga-office`。GitHub 应用同样是单独安装的可选扩展 `dsh-beluga-github`。基础包不依赖这两个扩展，也不包含它们的库；模型和上传文件均不能触发自动安装。
 
 ## 从源码构建
 
@@ -125,4 +125,20 @@ dsh plugin --profile web add ./dsh-beluga-office-0.1.0.tgz
 dsh plugin --profile web remove dsh-beluga-office
 ```
 
-两个包目前均未发布到公共市场；上述路径指自行构建或明确取得的 tarball。
+## 按需安装 GitHub 应用
+
+在已安装 Chat 的同一 profile 执行：
+
+```sh
+dsh plugin --profile web add ./dsh-beluga-github-0.1.0.tgz
+```
+
+重启该 profile 后，在 Chat 的 **设置 → 应用** 连接账号：使用这台电脑的 GitHub CLI 登录，或粘贴细粒度令牌。Beluga 先向 GitHub 验证令牌，再只保存在 Harness 凭据库，不写入自己的数据库，也不会再显示。
+
+- **在聊天里处理 GitHub：** 分拣拉取请求和议题，读取文件与审查，查看 Actions 运行及日志，评论、建分支、开拉取请求和合并。工具来自 GitHub 官方 MCP 服务；创建、复刻或删除整个仓库不提供。
+- **按需使用：** 消息需要时模型自动使用 GitHub；也可从 + 菜单为单条消息选择 **GitHub**。可在应用里关闭自动使用。
+- **改动默认先问你：** 卡片列出操作和将发送的内容，提供 **允许** 和 **拒绝**。应用里可改为低风险操作（评论、议题、分支和拉取请求）直接执行，或全部直接执行。读取从不询问；停止回合会结束等待且不执行。
+
+GitHub 返回的内容和其他工具结果一样会发给所选模型提供方。先断开连接再执行 `dsh plugin --profile web remove dsh-beluga-github`，令牌才会一并删除；聊天保留。
+
+这些包目前均未发布到公共市场；上述路径指自行构建或明确取得的 tarball。

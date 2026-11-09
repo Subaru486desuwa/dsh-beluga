@@ -52,8 +52,8 @@ interface Table<K extends string, V> {
   delete(key: K): Promise<boolean>
 }
 const initial: MemoryLedger = { profile: { revision: 0, background: '', instructions: '', autoSaveLowRisk: true, referenceChats: true, updatedAt: 0 }, memories: [], candidates: [], suppressed: [] }
-/** Tools are there when the model needs them. */
-const defaultApps: AppSettings = { webAuto: true, workMemory: false, workRecords: false, workWorkspaces: [] }
+/** Tools are there when the model needs them, and every GitHub change waits for the person. */
+const defaultApps: AppSettings = { webAuto: true, githubAuto: true, githubApproval: 'ask', workMemory: false, workRecords: false, workWorkspaces: [] }
 const emptySummary: SummaryRecord = { revision: 0, text: '', suggestions: [], updatedAt: 0, history: [], progress: {}, collectedAt: 0, lastRunAt: 0, sensitive: false }
 /** One match in an earlier chat, for the model to quote. */
 export interface ChatExcerpt { readonly conversationId: T.ConversationId; readonly title: string; readonly updatedAt: number; readonly excerpt: string }

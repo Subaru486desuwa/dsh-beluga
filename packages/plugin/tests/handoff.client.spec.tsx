@@ -9,7 +9,7 @@ afterEach(cleanup)
 const t = ((key: string, params?: object) => key + (params ? ' ' + JSON.stringify(params) : '')) as never
 const route = { provider: 'fixture', model: 'echo', name: 'Fixture', images: false }
 const workspace = (id: string, title: string) => ({ id: id as WorkspaceRef, title, path: '/projects/' + title.toLowerCase(), allowed: false })
-const apps = (workspaces: AppsView['work']['workspaces']): AppsView => ({ web: { available: false, auto: false }, work: { memoryAvailable: true, recordsAvailable: true, memory: false, records: false, workspaces } })
+const apps = (workspaces: AppsView['work']['workspaces']): AppsView => ({ web: { available: false, auto: false }, github: { installed: false, auto: false, approval: 'ask' }, work: { memoryAvailable: true, recordsAvailable: true, memory: false, records: false, workspaces } })
 
 function page(options: { temporary?: boolean; messages?: number; apps?: AppsView; busy?: boolean; commands?: Partial<PersonalCommands> } = {}) {
   const messages = Array.from({ length: options.messages ?? 2 }, (_, index) => ({ id: 'm' + index, role: index % 2 ? 'assistant' : 'user', text: 'Message ' + index, time: 1, attachmentIds: [], toolNames: [] }))

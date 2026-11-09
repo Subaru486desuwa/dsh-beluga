@@ -50,3 +50,7 @@ console.log('Built Host, generated Remote codecs, declarations and lazy-CJS Clie
 const officeTypecheck = spawnSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '-b', 'packages/office/tsconfig.json'], { cwd: root, stdio: 'inherit' })
 if (officeTypecheck.status !== 0) process.exit(officeTypecheck.status ?? 1)
 await build({ entryPoints: [join(root, 'packages/office/lib/types/index.js')], outfile: join(root, 'packages/office/lib/index.js'), platform: 'node', format: 'esm', target: 'node24', bundle: true, packages: 'external' })
+
+const githubTypecheck = spawnSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '-b', 'packages/github/tsconfig.json'], { cwd: root, stdio: 'inherit' })
+if (githubTypecheck.status !== 0) process.exit(githubTypecheck.status ?? 1)
+await build({ entryPoints: [join(root, 'packages/github/lib/types/index.js')], outfile: join(root, 'packages/github/lib/index.js'), platform: 'node', format: 'esm', target: 'node24', bundle: true, packages: 'external' })

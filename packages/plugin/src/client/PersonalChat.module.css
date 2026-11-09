@@ -255,8 +255,28 @@
 .appCheck input { flex: none; margin: 4px 0 0; }
 .appCheck span { display: flex; flex-direction: column; }
 .appCheck small { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 1.5; }
+.appConnect { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.appConnect p { margin: 0; }
+.appToken { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; width: 100%; }
+.appToken label { display: flex; flex: 1 1 240px; flex-direction: column; gap: 6px; min-width: 0; }
+.appToken input { box-sizing: border-box; width: 100%; height: 36px; padding: 0 10px; border: .5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-base); color: inherit; font: inherit; }
+.appAccount { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.appAccount span { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.appAccount small { color: var(--dsw-alias-label-secondary); }
 .appLevels { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; border: 0; }
 .appLevels legend { margin-bottom: 8px; padding: 0; font-weight: 600; }
+/* A GitHub change waiting in the reply for the person's answer. */
+.approval { margin: 4px 0 16px; padding: 14px 16px; border: .5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-lg); background: var(--dsw-alias-bg-base); box-shadow: var(--dsw-elevation-soft); font-size: 14px; line-height: 20px; }
+.approvalHead { display: flex; align-items: center; gap: 8px; }
+/* The state colour tints the badge and the text keeps the label colour: Harness's dark error tokens share one value, so red text on red would vanish. */
+.riskBadge { margin-left: auto; padding: 0 8px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 18%, transparent); color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 20px; white-space: nowrap; }
+.riskBadge[data-risk='high'] { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 22%, transparent); }
+.approvalAction { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 10px 0 0; overflow-wrap: anywhere; }
+.approvalAction code { font-weight: 600; }
+.approvalAction span { color: var(--dsw-alias-label-secondary); }
+.approvalLabel { margin: 10px 0 4px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.approvalDetails { max-height: 240px; margin: 0; padding: 8px 10px; overflow: auto; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-2); font-size: 12px; line-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.approvalActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 /* Chat's sidebar region (ADR 0005): sized by the stock column, so it scrolls its own rows. */
 .nav { display: flex; flex-direction: column; box-sizing: border-box; height: 100%; min-height: 0; gap: 4px; padding: 4px 8px 8px; color: var(--dsw-alias-label-primary); font-size: 14px; }

@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Button, IconCheckCircleFillRegular, IconChevronDownOutlineRegular, IconChevronLeftOutlineRegular, IconChevronRightOutlineRegular, IconCodeOutlineRegular, IconDeliverDocRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconFullscreenOutlineRegular, IconGlobeOutlineRegular, IconPersonalizationOutlineRegular, IconRefreshOutlineRegular, IconSearchOutlineRegular, ImageLightbox, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ChatAttachment, ConversationDetail, LiveTurn, Memory, MemoryCandidate, MemoryState, TodoItem } from '../shared/types.ts'
+import type { ChatAttachment, ConversationDetail, LiveTurn, Memory, MemoryCandidate, MemoryState, PendingAction, TodoItem } from '../shared/types.ts'
 import type { PersonalState } from './model.ts'
 import type { PersonalCommands } from './contract.ts'
 import type { PersonalChatKey } from './locales.ts'
@@ -13,7 +13,7 @@ import { turnsOf, variantsOf, type ChatTurn, type Variants } from './turns.ts'
 import { ActionButton, CopyButton, UserBubble, autoGrow, useMarkdown } from './Message.tsx'
 import { FileTile, officeFile } from './Composer.tsx'
 import { CANDIDATE_REASONS } from './Memory.tsx'
-import { ArrowDownGlyph, SpeakerGlyph, StopGlyph } from './icons.tsx'
+import { ArrowDownGlyph, GitHubGlyph, SpeakerGlyph, StopGlyph } from './icons.tsx'
 import css from './PersonalChat.module.css'
 
 type T = TranslateNS<'personalChat'>
@@ -22,9 +22,23 @@ type T = TranslateNS<'personalChat'>
 const TOOL_STATUS: Readonly<Record<string, PersonalChatKey>> = {
   web_search: 'toolWebSearch', web_fetch: 'toolWebFetch', create_document: 'toolDocument', edit_document: 'toolDocument', fill_template: 'toolDocument',
   create_workbook: 'toolWorkbook', edit_workbook: 'toolWorkbook', create_presentation: 'toolPresentation', read_sheet: 'toolReadFile', read_attachment: 'toolReadFile',
-  memory_propose: 'toolMemory', memory_recall: 'toolMemory', search_chats: 'toolSearchChats', todo_write: 'toolPlanning',
+  memory_propose: 'toolMemory', memory_recall: 'toolMemory', search_chats: 'toolSearchChats', todo_write: 'toolPlanning', use_github: 'toolGitHub',
 }
-const toolStatus = (tool: string): PersonalChatKey => TOOL_STATUS[tool] ?? 'toolWorking'
+const toolStatus = (tool: string): PersonalChatKey => TOOL_STATUS[tool] ?? (tool.startsWith('github__') ? 'toolGitHub' : 'toolWorking')
+
+/** A GitHub change the reply waits on: what it does, where, and exactly what will be sent. */
+function ApprovalCard({ action, busy, commands, t }: { action: PendingAction; busy: boolean; commands: PersonalCommands; t: T }) {
+  return <section className={css.approval} aria-label={t('approvalTitle')}>
+    <div className={css.approvalHead}><GitHubGlyph size={18} /><strong>{t('approvalTitle')}</strong><span className={css.riskBadge} data-risk={action.risk}>{t(action.risk === 'high' ? 'riskHigh' : 'riskLow')}</span></div>
+    <p className={css.approvalAction}><code>{action.tool.replaceAll('_', ' ')}</code>{action.target && <span>{action.target}</span>}</p>
+    <p className={css.approvalLabel}>{t('approvalDetails')}</p>
+    <pre className={css.approvalDetails}>{action.details}</pre>
+    <div className={css.approvalActions}>
+      <Button variant="outline" disabled={busy} onClick={() => { void commands.decideAction(action.id, false) }}>{t('decline')}</Button>
+      <Button variant="primary" disabled={busy} onClick={() => { void commands.decideAction(action.id, true) }}>{t('allow')}</Button>
+    </div>
+  </section>
+}
 
 /**
  * Memories this turn proposed: one waiting is saved or dismissed here, and one saved can be undone.
@@ -275,7 +289,8 @@ export function ChatMessages({ state, commands, t, children }: { state: Personal
           const step = running && clock?.end !== undefined && turn.live!.reasoning ? clock.end - clock.start : undefined
           const thinkingMs = turn.thinkingMs === undefined && step === undefined ? undefined : (turn.thinkingMs ?? 0) + (step ?? 0)
           const since = thinkingNow && clock ? clock.start - (turn.thinkingMs ?? 0) : undefined
-          const status = running && !turn.todos && !thinkingNow && !turn.live!.text ? turn.live!.tool ? t(toolStatus(turn.live!.tool)) : undefined : undefined
+          const approval = turn.live?.approval
+          const status = running && !approval && !turn.todos && !thinkingNow && !turn.live!.text ? turn.live!.tool ? t(toolStatus(turn.live!.tool)) : undefined : undefined
           return <article key={turn.key} className={css.turn} data-latest={latest || undefined}>
             {turn.user && <div className={css.userTurn}>
               <Files ids={turn.user.attachmentIds} detail={detail} renderable={renderable} commands={commands} t={t} />
@@ -291,7 +306,8 @@ export function ChatMessages({ state, commands, t, children }: { state: Personal
               {(turn.reasoning || thinkingMs !== undefined || thinkingNow) && <ThinkingRow reasoning={turn.reasoning} t={t} {...thinkingMs === undefined ? {} : { ms: thinkingMs }} {...since === undefined ? {} : { since }} />}
               {turn.todos && <TodoCard todos={turn.todos} running={running} stopped={latest && stopped && !running} t={t} />}
               {status && <p className={css.status}><TextShimmer active>{status}</TextShimmer></p>}
-              {running && !turn.text && !status && !thinkingNow && !turn.todos && <span className={css.pending} role="status" aria-label={t('loading')} />}
+              {approval && <ApprovalCard action={approval} busy={state.busy} commands={commands} t={t} />}
+              {running && !turn.text && !status && !approval && !thinkingNow && !turn.todos && <span className={css.pending} role="status" aria-label={t('loading')} />}
               {turn.text && markdown(turn.text, running)}
               <Files ids={turn.attachmentIds} detail={detail} renderable={renderable} commands={commands} t={t} />
               <MemoryProposals turn={turn} memory={state.memory} busy={state.busy} commands={commands} t={t} />

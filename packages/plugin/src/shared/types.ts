@@ -160,12 +160,24 @@ export interface ChatAttachment {
   readonly bytes: number
   readonly image: boolean
 }
+/** A GitHub action the reply waits on until the person allows or declines it. */
+export interface PendingAction {
+  readonly id: string
+  /** The tool's own name, such as `merge_pull_request`. */
+  readonly tool: string
+  readonly risk: 'low' | 'high'
+  /** The repository, with the issue or pull request number when the call names one. */
+  readonly target?: string
+  /** The arguments as they will be sent, as indented JSON, shortened past a few thousand characters. */
+  readonly details: string
+}
 export interface LiveTurn {
   readonly id: string
   readonly branchId: BranchId
   readonly text: string
   readonly reasoning: string
   readonly tool?: string
+  readonly approval?: PendingAction
   /** How long the current model step had run when this view was built; the client counts on from its own clock. */
   readonly stepElapsedMs: number
 }
@@ -284,6 +296,7 @@ export interface BranchRequest {
   readonly text?: string
   readonly model?: ModelRef
   readonly web?: boolean
+  readonly github?: boolean
 }
 export interface AttachmentText {
   readonly name: string
@@ -302,10 +315,22 @@ export interface UploadLimits { readonly uploadBytes: number; readonly attachmen
   /** Whether the Office extension can render files here. */
   readonly office: boolean
 }
-/** Web search and Work crossings as the Apps page shows them. */
+/** Which GitHub actions that change something run without asking: none, the low-risk ones, or all. */
+export type ApprovalLevel = 'ask' | 'low' | 'all'
+/** Web search and connected apps as the Apps page shows them; never a token. */
 export interface AppsView {
   /** Web search and page reading through the Harness web provider; `auto` lets the model use them unasked. */
   readonly web: { readonly available: boolean; readonly auto: boolean }
+  readonly github: {
+    /** Whether the optional GitHub extension is installed and enabled. */
+    readonly installed: boolean
+    /** The signed-in account; absent until a token is stored. */
+    readonly account?: string
+    /** Where the stored token came from. */
+    readonly source?: 'token' | 'gh-cli'
+    readonly auto: boolean
+    readonly approval: ApprovalLevel
+  }
   /** Where Chat and Work reach each other; each crossing starts off. */
   readonly work: {
     /** Whether this Harness runs Work agents that can be offered a tool. */
@@ -330,6 +355,8 @@ export interface WorkspaceView {
 /** Settings the Apps page changes; absent fields stay as they are. */
 export interface AppsChange {
   readonly webAuto?: boolean
+  readonly githubAuto?: boolean
+  readonly githubApproval?: ApprovalLevel
   readonly workMemory?: boolean
   readonly workRecords?: boolean
   /** The workspaces Chat may read; it replaces the earlier list. */
@@ -338,7 +365,7 @@ export interface AppsChange {
 export interface PersonalChatOperations {
   limits(): Promise<UploadLimits>
   models(): Promise<readonly ModelChoice[]>
-  send(request: { readonly conversationId: ConversationId; readonly requestId: string; readonly branchId?: BranchId; readonly archive?: ArchiveSelection; readonly text: string; readonly attachmentIds?: readonly string[]; readonly model: ModelRef; readonly web?: boolean }): Promise<ConversationDetail>
+  send(request: { readonly conversationId: ConversationId; readonly requestId: string; readonly branchId?: BranchId; readonly archive?: ArchiveSelection; readonly text: string; readonly attachmentIds?: readonly string[]; readonly model: ModelRef; readonly web?: boolean; readonly github?: boolean }): Promise<ConversationDetail>
   stop(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail>
   removeAttachment(request: { readonly conversationId: ConversationId; readonly attachmentId: string }): Promise<void>
   upload(request: { readonly conversationId: ConversationId; readonly name: string; readonly base64: string }): Promise<ChatAttachment>
@@ -385,6 +412,11 @@ export interface PersonalChatOperations {
   summaryOptions(request: { readonly conversationId?: ConversationId; readonly model?: ModelRef; readonly sensitive: boolean }): Promise<MemorySummaryView>
   apps(): Promise<AppsView>
   updateApps(request: AppsChange): Promise<AppsView>
+  /** Check a token with GitHub, then keep it in the Harness credential store: a pasted one, or this computer's GitHub CLI sign-in. */
+  connectGitHub(request: { readonly token?: string; readonly cli?: boolean }): Promise<AppsView>
+  disconnectGitHub(): Promise<AppsView>
+  /** Answer the action a running reply waits on. */
+  decideAction(request: { readonly conversationId: ConversationId; readonly actionId: string; readonly allow: boolean }): Promise<ConversationDetail>
   /** Write a task brief from the chat, for the person to send to a new Work session. */
   handOff(request: { readonly conversationId: ConversationId }): Promise<{ readonly brief: string }>
 }

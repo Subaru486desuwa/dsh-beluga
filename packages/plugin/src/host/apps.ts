@@ -5,12 +5,13 @@ import type {} from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { PersonalChatError } from './archive.ts'
 import type { Config } from './config.ts'
+import type { ActionRisk, GitHubConnector } from './github-contract.ts'
 import type { AppSettings } from './records.ts'
 import type { PersonalDomain } from './storage.ts'
 import { WorkRecords } from './work-records.ts'
 import type { AppsView } from '../shared/types.ts'
 
-/** Web search and Work crossings: what the model may use unasked, and what Chat and Work may read of each other. */
+/** Web search, connected apps and Work crossings: what the model may use unasked, which GitHub changes wait for the person, and what Chat and Work may read of each other. */
 export class Apps {
   /** Work sessions Chat may read, by the settings here. */
   readonly work: WorkRecords
@@ -21,10 +22,13 @@ export class Apps {
   }
   settings(): AppSettings { return this.domain.apps.get() }
   async view(): Promise<AppsView> {
-    const { webAuto, workMemory, workRecords, workWorkspaces } = this.settings()
+    const { webAuto, githubAuto, githubApproval, workMemory, workRecords, workWorkspaces } = this.settings()
+    const github = this.ctx.get('personalChatGitHub')
+    const account = await github?.account()
     const allowed = new Set<string>(workWorkspaces)
     return {
       web: { available: !!this.ctx.get('web'), auto: webAuto },
+      github: { installed: !!github, ...(account ? { account: account.login, source: account.source } : {}), auto: githubAuto, approval: githubApproval },
       work: { memoryAvailable: this.memoryAvailable(), recordsAvailable: this.work.available(), memory: workMemory, records: workRecords, workspaces: this.work.workspaces().map(item => ({ ...item, allowed: allowed.has(item.id) })) },
     }
   }
@@ -42,6 +46,16 @@ export class Apps {
   }
   /** @param listener - runs after each saved change. @returns the unsubscribe. */
   watch(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
+  github(): GitHubConnector {
+    const github = this.ctx.get('personalChatGitHub')
+    if (!github) throw new PersonalChatError('github-not-installed', 'Install and enable the optional GitHub extension first')
+    return github
+  }
   /** @param chosen - the person picked web search for this message from the tools menu. */
   webOn(chosen: boolean): boolean { return (chosen || this.settings().webAuto) && !!this.ctx.get('web') }
+  /** Whether a call of this risk waits for the person to allow it. */
+  waits(risk: ActionRisk): boolean {
+    const level = this.settings().githubApproval
+    return risk !== 'read' && (level === 'ask' || (level === 'low' && risk === 'high'))
+  }
 }

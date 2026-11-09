@@ -6,7 +6,7 @@ Personal Chat for DeepSeek Harness, named after one of the most vocal whales.
 
 One plugin adds personal Chat beside Harness Work: conversations, ChatGPT history import, a reviewed personal profile, and controlled memory. Work keeps its own sessions and tools; Chat needs no repository.
 
-The base plugin provides Chat and Memory. Office is a recommended but separately downloaded extension, `dsh-beluga-office`, installed only after explicit user consent. The base package does not depend on Office or ship its processing libraries. Neither models nor uploads can install extensions.
+The base plugin provides Chat and Memory. Office is a recommended but separately downloaded extension, `dsh-beluga-office`, installed only after explicit user consent. GitHub is another optional extension, `dsh-beluga-github`. The base package depends on neither and ships none of their libraries. Neither models nor uploads can install extensions.
 
 ## Build from source
 
@@ -122,4 +122,14 @@ After explicit installation of the Office extension:
 
 Every change makes a new version and keeps the original. Chat does not run code, and formulas that fetch from the network or start programs are refused. Temporary Chat keeps files in memory, so it has no preview, PDF export, recalculation or layout check. Changing an existing PPTX is not available yet.
 
-Install the Office tarball into the existing Chat profile only after the user agrees: `dsh plugin --profile web add ./dsh-beluga-office-0.1.0.tgz`, then restart that profile. It uses the engine already installed with Harness, so nothing large is downloaded. Removing `dsh-beluga-office` disables processing while retaining chats, memory and existing artifact downloads. Neither package is published to the public market yet.
+Install the Office tarball into the existing Chat profile only after the user agrees: `dsh plugin --profile web add ./dsh-beluga-office-0.1.0.tgz`, then restart that profile. It uses the engine already installed with Harness, so nothing large is downloaded. Removing `dsh-beluga-office` disables processing while retaining chats, memory and existing artifact downloads.
+
+## GitHub app
+
+After installing the GitHub extension, open **Settings → Apps** in Chat and connect an account with this computer's GitHub CLI sign-in or a pasted fine-grained token. Beluga checks the token with GitHub, then keeps it in the Harness credential store only, never in its own database or a view.
+
+- **Work in GitHub from a chat:** triage pull requests and issues, read files and reviews, look into Actions runs and their logs, comment, open branches and pull requests, and merge. The tools come from GitHub's official MCP server. Creating, forking or deleting whole repositories is left out.
+- **On demand:** the model uses GitHub when a message needs it, or pick **GitHub** from the + menu for one message. Turn automatic use off in Apps.
+- **Changes wait for you by default:** a card shows the action and what will be sent, with **Allow** and **Decline**. Apps can let low-risk actions (comments, issues, branches and pull requests) or all actions run at once. Reads never ask, and Stop ends a wait without running the action.
+
+What GitHub returns goes to the selected model provider, like any tool result. Install with `dsh plugin --profile web add ./dsh-beluga-github-0.1.0.tgz`, then restart the profile. Disconnect before `dsh plugin --profile web remove dsh-beluga-github` to delete the token as well; chats stay. None of the packages is published to the public market yet.

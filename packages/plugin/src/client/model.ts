@@ -23,8 +23,9 @@ export interface PersonalState {
   readonly modelsLoading: boolean
   /** Tools picked from the tools menu for the next messages. */
   readonly web: boolean
+  readonly github: boolean
   readonly limits?: UploadLimits
-  /** Web search and Work crossings, as the Apps settings and the tools menu show them. */
+  /** Web search and connected apps, as the Apps settings and the tools menu show them. */
   readonly apps?: AppsView
   /** The route and effort the next message goes with. */
   readonly selectedModel: ModelRef | undefined
@@ -36,7 +37,7 @@ export interface PersonalState {
 }
 const SEARCH_DEBOUNCE_MS = 200
 export class PersonalModel {
-  readonly state = createSnapshotStore<PersonalState>({ status: 'loading', results: [], query: '', detail: undefined, settings: undefined, memory: undefined, imports: [], archivedChats: undefined, preview: undefined, busy: false, modelsLoading: true, web: false, models: [], selectedModel: undefined, draftTemporary: false, navigation: 0, notice: undefined })
+  readonly state = createSnapshotStore<PersonalState>({ status: 'loading', results: [], query: '', detail: undefined, settings: undefined, memory: undefined, imports: [], archivedChats: undefined, preview: undefined, busy: false, modelsLoading: true, web: false, github: false, models: [], selectedModel: undefined, draftTemporary: false, navigation: 0, notice: undefined })
   private searchGeneration = 0
   private refreshing = false
   private stale = false
@@ -201,6 +202,7 @@ export class PersonalModel {
   private detail(): ConversationDetail { const detail = this.state.getSnapshot().detail; if (!detail) throw new Error('No chat selected'); return detail }
   private model(): ModelRef { const model = this.state.getSnapshot().selectedModel; if (!model) throw new Error('Configure and select a model first'); return { provider: model.provider, model: model.model, ...(model.inline ? { inline: true } : {}), ...(model.effort === undefined ? {} : { effort: model.effort }) } }
   setWeb(web: boolean): void { this.patch({ web }) }
+  setGitHub(github: boolean): void { this.patch({ github }) }
   /** Switch route, with the effort last chosen for it. */
   chooseModel(model: ModelRef): void { this.patch({ selectedModel: this.withEffort(model) }) }
   /** @param effort - an effort the selected route offers, or undefined for its default. */
@@ -231,7 +233,7 @@ export class PersonalModel {
   }
   async send(text: string, attachmentIds: readonly string[]): Promise<void> {
     const current = (await this.ensure()).conversation
-    const payload = { conversationId: current.id, text, attachmentIds, model: this.model(), web: this.state.getSnapshot().web }
+    const payload = { conversationId: current.id, text, attachmentIds, model: this.model(), web: this.state.getSnapshot().web, github: this.state.getSnapshot().github }
     const key = JSON.stringify(payload)
     if (this.pendingSend?.key !== key) this.pendingSend = { key, id: crypto.randomUUID(), target: current.selectedBranchId ? { branchId: current.selectedBranchId } : current.selectedArchive ? { archive: current.selectedArchive } : {} }
     this.select(await this.api.send({ ...payload, ...this.pendingSend.target, requestId: this.pendingSend.id }), true)
@@ -268,9 +270,9 @@ export class PersonalModel {
   async branch(messageId: string, action: 'edit' | 'regenerate' | 'fork', text?: string): Promise<void> {
     const current = this.detail().conversation
     if (!current.selectedBranchId) throw new Error('Select a branch first')
-    const { web } = this.state.getSnapshot()
-    const payload = { conversationId: current.id, branchId: current.selectedBranchId, messageId, action, ...(text === undefined ? {} : { text }), model: this.model(), web }
-    const key = JSON.stringify({ conversationId: current.id, messageId, action, text, model: this.model(), web })
+    const { web, github } = this.state.getSnapshot()
+    const payload = { conversationId: current.id, branchId: current.selectedBranchId, messageId, action, ...(text === undefined ? {} : { text }), model: this.model(), web, github }
+    const key = JSON.stringify({ conversationId: current.id, messageId, action, text, model: this.model(), web, github })
     if (this.pendingBranch?.key !== key) this.pendingBranch = { key, id: crypto.randomUUID(), branchId: current.selectedBranchId }
     this.select(await this.api.branch({ ...payload, branchId: this.pendingBranch.branchId, requestId: this.pendingBranch.id }), true)
     this.pendingBranch = undefined
@@ -298,6 +300,10 @@ export class PersonalModel {
   }
   /** Read Work workspaces again, as the hand-off lists them. */
   async loadApps(): Promise<void> { this.patch({ apps: await this.api.apps() }) }
+  async connectGitHub(source: { readonly token: string } | { readonly cli: true }): Promise<void> { this.patch({ apps: await this.api.connectGitHub(source) }) }
+  /** A disconnected account can no longer be picked for the next message. */
+  async disconnectGitHub(): Promise<void> { this.patch({ apps: await this.api.disconnectGitHub(), github: false }) }
+  async decideAction(actionId: string, allow: boolean): Promise<void> { this.select(await this.api.decideAction({ conversationId: this.detail().conversation.id, actionId, allow }), true) }
   /** @param announce - offer Undo for a memory another chat saved on its own; the open chat shows its own under the reply. */
   async refreshMemory(announce: boolean): Promise<void> {
     if (this.state.getSnapshot().detail?.conversation.temporary) return

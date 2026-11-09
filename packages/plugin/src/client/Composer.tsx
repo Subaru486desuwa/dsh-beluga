@@ -8,7 +8,7 @@ import type { PersonalChatKey } from './locales.ts'
 import type { PersonalCommands } from './contract.ts'
 import type { PersonalState } from './model.ts'
 import { ModelPicker, selectedChoice, shortName } from './ModelPicker.tsx'
-import { ArrowUpGlyph, DropGlyph, StopGlyph } from './icons.tsx'
+import { ArrowUpGlyph, DropGlyph, GitHubGlyph, StopGlyph } from './icons.tsx'
 import { autoGrow } from './Message.tsx'
 import css from './PersonalChat.module.css'
 
@@ -133,17 +133,24 @@ export function Composer({ state, commands, tray, imagesNeeded, uploadable, t }:
     if (!sendable) return
     if (await commands.send(text, ready.map(item => item.attachment!.id))) { setText(''); tray.clear() }
   }
+  const github = state.apps?.github
+  // GitHub is offered once an account is connected; before that the menu leads to the Apps page.
+  const githubReady = !!github?.installed && !!github.account
+  const githubOn = state.github && githubReady
   const webOffered = state.apps?.web.available !== false
   const tools = [
     { id: 'files', label: t('addFiles'), icon: <IconPaperclipOutlineRegular size={18} />, disabled: !uploadable },
     ...(webOffered ? [{ id: 'web', label: t('webSearch'), icon: <IconGlobeOutlineRegular size={18} /> }] : []),
+    ...(githubReady ? [{ id: 'github', label: t('github'), icon: <GitHubGlyph size={18} /> }] : github?.installed ? [{ id: 'connect', label: t('connectGitHub'), icon: <GitHubGlyph size={18} /> }] : []),
   ]
   const pick = (id: string) => {
     setToolsOpen(false)
     if (id === 'files') picker.current?.click()
     else if (id === 'web') commands.setWeb(!state.web)
+    else if (id === 'github') commands.setGitHub(!state.github)
+    else if (id === 'connect') void commands.openSettings('apps')
   }
-  return <form className={css.composer} data-expanded={expanded || state.web || state.models.length > 0 || tray.items.length > 0 || undefined} onSubmit={event => { event.preventDefault(); void submit() }}
+  return <form className={css.composer} data-expanded={expanded || state.web || githubOn || state.models.length > 0 || tray.items.length > 0 || undefined} onSubmit={event => { event.preventDefault(); void submit() }}
     onClick={event => { if (event.target === event.currentTarget) input.current?.focus() }}>
     {tray.items.length > 0 && <TrayView tray={tray} officeMissing={state.limits?.office === false} t={t} />}
     {imageBlocked && <p className={css.composerNotice} role="status">{t('imageMismatch')}{switchTo && <button type="button" className={css.linkButton} onClick={() => { commands.chooseModel(switchTo) }}>{t('switchModel', { name: shortName(switchTo) })}</button>}</p>}
@@ -152,10 +159,11 @@ export function Composer({ state, commands, tray, imagesNeeded, uploadable, t }:
       onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); void submit() } }}
       onPaste={event => { const files = Array.from(event.clipboardData.files); if (files.length && uploadable) { event.preventDefault(); tray.add(files) } }} />
     <div className={css.composerLeading}>
-      <Menu open={toolsOpen} onClose={() => { setToolsOpen(false) }} portal side="top" autoFocus selection="check" selectedIds={state.web ? ['web'] : []}
+      <Menu open={toolsOpen} onClose={() => { setToolsOpen(false) }} portal side="top" autoFocus selection="check" selectedIds={[...state.web ? ['web'] : [], ...githubOn ? ['github'] : []]}
         items={tools} onSelect={pick}
         anchor={<button type="button" className={css.roundButton} aria-label={t('tools')} aria-haspopup="menu" aria-expanded={toolsOpen} onClick={() => { setToolsOpen(value => !value) }}><IconPlusOutlineRegular size={20} /></button>} />
       {state.web && <button type="button" className={css.chip} data-active="true" aria-label={t('removeWeb')} onClick={() => { commands.setWeb(false) }}><span className={css.chipIcon}><IconGlobeOutlineRegular size={18} /></span><span className={css.chipClose}><IconCloseOutlineRegular size={14} /></span><span>{t('webChip')}</span></button>}
+      {githubOn && <button type="button" className={css.chip} data-active="true" aria-label={t('removeGitHub')} onClick={() => { commands.setGitHub(false) }}><span className={css.chipIcon}><GitHubGlyph size={16} /></span><span className={css.chipClose}><IconCloseOutlineRegular size={14} /></span><span>{t('github')}</span></button>}
       <input ref={picker} className={css.hiddenFile} type="file" multiple tabIndex={-1} onChange={event => { const files = event.target.files; if (files?.length) tray.add(Array.from(files)); event.target.value = '' }} />
     </div>
     <div className={css.composerTrailing}>

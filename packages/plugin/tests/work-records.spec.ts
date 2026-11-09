@@ -6,7 +6,7 @@ import type { WorkspaceRef } from '../src/shared/types.ts'
 import { ALPHA, BETA, HOUR, MORNING, fakeWork, said, workday, type FakeSession } from './work-fixtures.ts'
 
 const signal = new AbortController().signal
-const settings = (change: Partial<AppSettings> = {}): AppSettings => ({ webAuto: true, workMemory: false, workRecords: true, workWorkspaces: [brandString<WorkspaceRef>(ALPHA.id)], ...change })
+const settings = (change: Partial<AppSettings> = {}): AppSettings => ({ webAuto: true, githubAuto: true, githubApproval: 'ask', workMemory: false, workRecords: true, workWorkspaces: [brandString<WorkspaceRef>(ALPHA.id)], ...change })
 function records(options: { sessions?: readonly FakeSession[]; settings?: AppSettings; reach?: WorkReach; maxWorkBytes?: number; maxWorkSessions?: number } = {}) {
   const work = fakeWork(options.sessions ?? workday())
   const reach = options.reach ?? work

@@ -65,8 +65,8 @@ function mountView(ctx: Context): void {
     decideCandidate: request => unwrap(remote.decideCandidate(request)), editMemory: request => unwrap(remote.editMemory(request)), forgetMemory: request => unwrap(remote.forgetMemory(request)),
     refreshSummary: request => unwrap(remote.refreshSummary(request)), askSummary: request => unwrap(remote.askSummary(request)), editSummary: request => unwrap(remote.editSummary(request)), undoSummary: request => unwrap(remote.undoSummary(request)),
     clearSummary: request => unwrap(remote.clearSummary(request)), summaryOptions: request => unwrap(remote.summaryOptions(request)),
-    apps: () => unwrap(remote.apps()), updateApps: request => unwrap(remote.updateApps(request)),
-    handOff: request => unwrap(remote.handOff(request)),
+    apps: () => unwrap(remote.apps()), updateApps: request => unwrap(remote.updateApps(request)), connectGitHub: request => unwrap(remote.connectGitHub(request)), disconnectGitHub: () => unwrap(remote.disconnectGitHub()),
+    decideAction: request => unwrap(remote.decideAction(request)), handOff: request => unwrap(remote.handOff(request)),
   }
   const instance = new PersonalModel(api)
   model = instance
@@ -92,7 +92,10 @@ function mountView(ctx: Context): void {
     startChat: text => instance.run(() => instance.startChat(text)),
     preview: file => instance.run(async () => { await instance.preview(file.name, bytesBase64(await exportUpload(file, instance.state.getSnapshot().limits))) }), discardPreview: () => instance.discardPreview(),
     commitImport: () => instance.run(() => instance.commitImport(), 'importComplete'), undoImport: id => instance.run(() => instance.undoImport(id)),
+    setGitHub: github => instance.setGitHub(github),
     updateApps: change => instance.run(() => instance.updateApps(change), 'changed'),
+    connectGitHub: source => instance.run(() => instance.connectGitHub(source), 'githubConnectedNotice'), disconnectGitHub: () => instance.run(() => instance.disconnectGitHub()),
+    decideAction: (actionId, allow) => instance.run(() => instance.decideAction(actionId, allow)),
     // Work's navigation opens the session and then reveals Work itself. Selecting a panel here would
     // abort the pending navigation that `startSession` begins, leaving the brief unwritten.
     handOff: workspace => instance.run(async () => {

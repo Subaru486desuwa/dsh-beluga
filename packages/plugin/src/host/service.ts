@@ -28,6 +28,8 @@ export type * from '../shared/types.ts'
 
 /** The kit gives up at 60 s per operation; this also covers the wait for a turn behind it. */
 const RENDER_TIMEOUT_MS = 180000
+/** Checking a token is one GitHub sign-in and one call. */
+const CONNECT_TIMEOUT_MS = 30000
 export type * from '../shared/models.ts'
 export { Config } from './config.ts'
 
@@ -231,7 +233,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       if (prior) {
         if (prior.parentBranchId !== request.branchId || prior.sourceMessageId !== request.messageId || prior.operation !== request.action) throw new PersonalChatError('request-conflict', 'This request id was already used for another operation')
         const admitted = record.entries.find(entry => entry.originBranchId === prior.id && entry.message.role === 'user')
-        if ((request.action === 'edit' && admitted?.userText !== request.text?.trim()) || (request.model && admitted?.admissionModel && !sameModel(request.model, admitted.admissionModel)) || (admitted && !!admitted.admissionWeb !== !!request.web)) throw new PersonalChatError('request-conflict', 'This branch request id has a different payload')
+        if ((request.action === 'edit' && admitted?.userText !== request.text?.trim()) || (request.model && admitted?.admissionModel && !sameModel(request.model, admitted.admissionModel)) || (admitted && (!!admitted.admissionWeb !== !!request.web || !!admitted.admissionGitHub !== !!request.github))) throw new PersonalChatError('request-conflict', 'This branch request id has a different payload')
         return this.chats.detail({ ...current, selectedBranchId: prior.id })
       }
       this.chats.idle(request.conversationId)
@@ -255,7 +257,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
         const model = request.model ?? record.model
         if (!model) throw new PersonalChatError('model-unavailable', 'Select a model before generating')
         await this.requireModel(model)
-        run = await this.turns.admit(updated, branch, request.action === 'edit' ? request.text ?? '' : input.userText ?? textOf(input.message), input.attachmentIds, model, { web: request.web === true })
+        run = await this.turns.admit(updated, branch, request.action === 'edit' ? request.text ?? '' : input.userText ?? textOf(input.message), input.attachmentIds, model, { web: request.web === true, github: request.github === true })
       } else await this.chats.saveRecord(updated)
       return this.chats.detail(this.chats.find(current.id))
     })
@@ -263,7 +265,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     return result
   }
   /** Start a response after durable input admission, or entirely in memory for Temporary Chat. */
-  @Remote async send(request: { readonly conversationId: ConversationId; readonly requestId: string; readonly branchId?: BranchId; readonly archive?: ArchiveSelection; readonly text: string; readonly attachmentIds?: readonly string[]; readonly model: ModelRef; readonly web?: boolean }): Promise<ConversationDetail> {
+  @Remote async send(request: { readonly conversationId: ConversationId; readonly requestId: string; readonly branchId?: BranchId; readonly archive?: ArchiveSelection; readonly text: string; readonly attachmentIds?: readonly string[]; readonly model: ModelRef; readonly web?: boolean; readonly github?: boolean }): Promise<ConversationDetail> {
     this.owner()
     this.requestId(request.requestId)
     let run: RunningTurn | undefined
@@ -273,7 +275,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       let conversation = this.chats.find(request.conversationId)
       const prior = record.entries.find(entry => entry.id === request.requestId)
       if (prior) {
-        if (prior.message.role !== 'user' || prior.userText !== request.text.trim() || JSON.stringify(prior.attachmentIds) !== JSON.stringify(request.attachmentIds ?? []) || (!prior.admissionModel || !sameModel(prior.admissionModel, request.model)) || !!prior.admissionWeb !== !!request.web) throw new PersonalChatError('request-conflict', 'This request id was already used for another message')
+        if (prior.message.role !== 'user' || prior.userText !== request.text.trim() || JSON.stringify(prior.attachmentIds) !== JSON.stringify(request.attachmentIds ?? []) || (!prior.admissionModel || !sameModel(prior.admissionModel, request.model)) || !!prior.admissionWeb !== !!request.web || !!prior.admissionGitHub !== !!request.github) throw new PersonalChatError('request-conflict', 'This request id was already used for another message')
         const originalBranch = conversation.branches.find(branch => branch.id === prior.originBranchId)
         if ((request.branchId && request.branchId !== prior.originBranchId) || (request.archive && (originalBranch?.archive?.revisionId !== request.archive.revisionId || originalBranch.archive.nodeId !== request.archive.nodeId))) throw new PersonalChatError('request-conflict', 'This request id has another branch target')
         duplicate = this.chats.detail({ ...conversation, ...(prior.originBranchId ? { selectedBranchId: prior.originBranchId } : {}) })
@@ -296,7 +298,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       if (conversation.archived) throw new PersonalChatError('archived', 'Restore this conversation before sending')
       if (!conversation.selectedBranchId) { conversation = await this.ensureContinuation(conversation); record = this.chats.record(conversation.id) }
       const branch = conversation.branches.find(item => item.id === conversation.selectedBranchId)!
-      run = await this.turns.admit(record, branch, request.text, request.attachmentIds ?? [], request.model, { web: request.web === true }, request.requestId)
+      run = await this.turns.admit(record, branch, request.text, request.attachmentIds ?? [], request.model, { web: request.web === true, github: request.github === true }, request.requestId)
     })
     if (duplicate) return duplicate
     if (run) this.turns.launch(request.conversationId, run)
@@ -306,12 +308,29 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     if (!await this.bridge.available(model)) throw new PersonalChatError('model-unavailable', 'Select an available configured model')
     if (!await this.bridge.takesEffort(model)) throw new PersonalChatError('effort-unavailable', 'Select a reasoning effort this model offers')
   }
-  /** Web search and Work crossings, with their settings. */
+  /** Allow or decline the GitHub action a reply waits on; the reply goes on either way. */
+  @Remote async decideAction(request: { readonly conversationId: ConversationId; readonly actionId: string; readonly allow: boolean }): Promise<ConversationDetail> {
+    this.owner()
+    const approval = this.chats.running.get(request.conversationId)?.approval
+    if (!approval || approval.action.id !== request.actionId) throw new PersonalChatError('action-unavailable', 'This action is no longer waiting for an answer')
+    approval.decide(request.allow === true)
+    return this.chats.detail(this.chats.find(request.conversationId))
+  }
+  /** Web search, connected apps and Work crossings, with their settings; never a token. */
   @Remote async apps(): Promise<AppsView> { this.owner(); return this.integrations.view() }
   @Remote async updateApps(request: AppsChange): Promise<AppsView> {
     this.owner()
-    const change = z.object({ webAuto: z.boolean().optional(), workMemory: z.boolean().optional(), workRecords: z.boolean().optional(), workWorkspaces: z.array(z.string().min(1).max(200).transform(brandString<WorkspaceRef>)).max(500).optional() }).strict().parse(request)
+    const change = z.object({ webAuto: z.boolean().optional(), githubAuto: z.boolean().optional(), githubApproval: z.enum(['ask', 'low', 'all']).optional(), workMemory: z.boolean().optional(), workRecords: z.boolean().optional(), workWorkspaces: z.array(z.string().min(1).max(200).transform(brandString<WorkspaceRef>)).max(500).optional() }).strict().parse(request)
     await this.chats.serial(() => this.integrations.update(Object.fromEntries(Object.entries(change).filter(([, value]) => value !== undefined))))
+    return this.integrations.view()
+  }
+  /** Check a token with GitHub, then keep it in the Harness credential store; the token never comes back. */
+  @Remote async connectGitHub(request: { readonly token?: string; readonly cli?: boolean }): Promise<AppsView> {
+    this.owner()
+    const github = this.integrations.github()
+    const token = request.token?.trim()
+    if (request.cli === true ? token !== undefined : !token || token.length > 1000 || /\s/u.test(token)) throw new PersonalChatError('invalid-token', 'Paste one GitHub token, or use the GitHub CLI sign-in')
+    await github.connect(request.cli === true ? { cli: true } : { token: token! }, AbortSignal.timeout(CONNECT_TIMEOUT_MS))
     return this.integrations.view()
   }
   /** Write a task brief from the chat; the person sends it to a new Work session themselves. */
@@ -320,6 +339,8 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     this.chats.find(request.conversationId)
     return { brief: await this.handOffs.brief(request.conversationId) }
   }
+  /** Remove the stored token; GitHub keeps it valid until it is revoked there. */
+  @Remote async disconnectGitHub(): Promise<AppsView> { this.owner(); await this.integrations.github().disconnect(); return this.integrations.view() }
   /** Cancel the provider and in-flight tools, then return the settled prefix. */
   @Remote async stop(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail> {
     this.owner()

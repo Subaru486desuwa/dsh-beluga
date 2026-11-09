@@ -11,14 +11,16 @@ import LlmRuntime, { LlmAdapter, type GenerateOptions, type LlmResolvedModelInfo
 import { brandString } from '@deepseek-ai/dsh-brand'
 import PersonalChatService from '../lib/index.js'
 import OfficeExtension from '../../office/lib/index.js'
+import GitHubExtension from '../../github/lib/index.js'
 import { PersonalStore } from '../src/host/storage.ts'
 import type { ConversationRecord } from '../src/host/records.ts'
-import type { ConversationDetail, ConversationId, MemorySummaryView } from '../src/shared/types.ts'
+import type { ConversationDetail, ConversationId, MemorySummaryView, PendingAction } from '../src/shared/types.ts'
 import type { MemorySummaries } from '../src/host/memory-summary.ts'
 import { strFromU8, unzipSync, zipSync } from 'fflate'
 import { currentExport, fixture } from './fixtures/chatgpt.ts'
 import { pdf } from './fixtures/pdf.ts'
 import { budgetDeck, formDocument, wordDocument, wordParagraphs, workbook } from './office-fixtures.ts'
+import { FakeCredentials, fakeGitHub, FIXTURE_TOKEN } from './github-fixtures.ts'
 import { fakeWork, workday } from './work-fixtures.ts'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 
@@ -1527,6 +1529,132 @@ describe('web search on demand', () => {
     expect(last.tools).toContain('web_search')
     expect(JSON.stringify(last.messages)).toContain('[The user turned on web search for this message')
     expect(chat.messages.filter(message => message.role === 'user').at(-1)!.text).toBe('Search this')
+  })
+})
+
+describe('GitHub app', () => {
+  async function connected() {
+    const server = await fakeGitHub()
+    onTestFinished(() => server.close())
+    const app = await setup()
+    app.ctx.provide('credentials', new FakeCredentials())
+    await app.ctx.plugin(GitHubExtension, { url: server.url })
+    await app.service.connectGitHub({ token: FIXTURE_TOKEN })
+    return { ...app, server }
+  }
+  /** Follows a reply to its end, answering each action it waits on, and returns what it asked. */
+  async function answering(service: PersonalChatService, id: ConversationId, answer: (action: PendingAction) => boolean | 'stop'): Promise<{ detail: ConversationDetail; asked: PendingAction[] }> {
+    const asked: PendingAction[] = []
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10000)
+    try {
+      for await (const update of service.followConversation({ conversationId: id }, controller.signal)) {
+        if (update.kind === 'failure') throw new Error(update.reason)
+        if (update.kind !== 'snapshot') continue
+        const approval = update.detail.live?.approval
+        if (approval && !asked.some(item => item.id === approval.id)) {
+          asked.push(approval)
+          const decision = answer(approval)
+          if (decision === 'stop') await service.stop({ conversationId: id })
+          else await service.decideAction({ conversationId: id, actionId: approval.id, allow: decision })
+        }
+        if (!update.detail.live) return { detail: update.detail, asked }
+      }
+      throw new Error('Turn did not settle')
+    } finally { clearTimeout(timer); controller.abort() }
+  }
+
+  it('loads tools by name when the model asks, and keeps them for the rest of the branch', async () => {
+    const app = await connected()
+    const chat = await app.service.create({ temporary: false })
+    app.adapter.script.push({ name: 'use_github', arguments: { tools: ['list_issues', 'not_a_tool'] } }, { name: 'github__list_issues', arguments: { owner: 'o', repo: 'r' } })
+    await send(app.service, chat, 'What is open?')
+    const { detail, asked } = await answering(app.service, chat.conversation.id, () => true)
+    expect(asked).toEqual([])
+    expect(detail.error).toBeUndefined()
+    const [first, second] = chatRequests(app.adapter)
+    expect(first!.tools).toContain('use_github')
+    expect(first!.tools.filter(name => name.startsWith('github__'))).toEqual([])
+    expect(second!.tools.filter(name => name.startsWith('github__'))).toEqual(['github__list_issues'])
+    const results = detail.messages.filter(message => message.role === 'tool').map(message => message.text)
+    expect(results[0]).toContain('"unknown":["not_a_tool"]')
+    expect(results[1]).toContain('Fixture issue')
+    expect(app.server.calls).toEqual([{ name: 'list_issues', args: { owner: 'o', repo: 'r' } }])
+    await send(app.service, detail, 'And now?')
+    await settled(app.service, chat.conversation.id)
+    expect(chatRequests(app.adapter).at(-1)!.tools).toContain('github__list_issues')
+    expect(await diskText(app.path)).not.toContain(FIXTURE_TOKEN)
+  })
+
+  it('waits for the person before a change, and goes on whether they allow or decline it', async () => {
+    const app = await connected()
+    const chat = await app.service.create({ temporary: false })
+    app.adapter.script.push({ name: 'use_github', arguments: { tools: ['add_issue_comment', 'merge_pull_request'] } }, { name: 'github__add_issue_comment', arguments: { owner: 'o', repo: 'r', issue_number: 7, body: 'Looks good' } })
+    await send(app.service, chat, 'Comment on it')
+    let run = await answering(app.service, chat.conversation.id, () => { expect(app.server.calls).toEqual([]); return true })
+    expect(run.asked).toEqual([{ id: expect.any(String), tool: 'add_issue_comment', risk: 'low', target: 'o/r#7', details: expect.stringContaining('"body": "Looks good"') }])
+    expect(app.server.calls.map(call => call.name)).toEqual(['add_issue_comment'])
+    expect(run.detail.messages.at(-1)!.text).toBe('Tool completed.')
+    app.adapter.script.push({ name: 'github__merge_pull_request', arguments: { owner: 'o', repo: 'r', pullNumber: 3 } })
+    await send(app.service, run.detail, 'Merge it')
+    run = await answering(app.service, chat.conversation.id, () => false)
+    expect(run.asked.map(action => [action.tool, action.risk, action.target])).toEqual([['merge_pull_request', 'high', 'o/r#3']])
+    expect(app.server.calls.map(call => call.name)).toEqual(['add_issue_comment'])
+    expect(run.detail.messages.filter(message => message.role === 'tool').at(-1)!.text).toContain('declined')
+    expect(run.detail.messages.at(-1)!.text).toBe('Tool completed.')
+    await expect(app.service.decideAction({ conversationId: chat.conversation.id, actionId: run.asked[0]!.id, allow: true })).rejects.toThrow('no longer waiting')
+  })
+
+  it('runs low-risk changes at once when allowed to, and still asks before high-risk ones', async () => {
+    const app = await connected()
+    expect((await app.service.updateApps({ githubApproval: 'low' })).github.approval).toBe('low')
+    const chat = await app.service.create({ temporary: false })
+    app.adapter.script.push({ name: 'use_github', arguments: { tools: ['add_issue_comment', 'delete_file'] } }, { name: 'github__add_issue_comment', arguments: { owner: 'o', repo: 'r', issue_number: 7, body: 'Done' } }, { name: 'github__delete_file', arguments: { owner: 'o', repo: 'r', path: 'old.txt' } })
+    await send(app.service, chat, 'Tidy up')
+    let run = await answering(app.service, chat.conversation.id, () => true)
+    expect(run.asked.map(action => action.tool)).toEqual(['delete_file'])
+    expect(app.server.calls.map(call => call.name)).toEqual(['add_issue_comment', 'delete_file'])
+    await app.service.updateApps({ githubApproval: 'all' })
+    app.adapter.script.push({ name: 'github__delete_file', arguments: { owner: 'o', repo: 'r', path: 'older.txt' } })
+    await send(app.service, run.detail, 'And that one')
+    run = await answering(app.service, chat.conversation.id, () => true)
+    expect(run.asked).toEqual([])
+    expect(app.server.calls.map(call => call.name)).toEqual(['add_issue_comment', 'delete_file', 'delete_file'])
+  })
+
+  it('ends a wait on Stop as a stop, without running the action', async () => {
+    const app = await connected()
+    const chat = await app.service.create({ temporary: false })
+    app.adapter.script.push({ name: 'use_github', arguments: { tools: ['merge_pull_request'] } }, { name: 'github__merge_pull_request', arguments: { owner: 'o', repo: 'r', pullNumber: 3 } })
+    await send(app.service, chat, 'Merge it')
+    const run = await answering(app.service, chat.conversation.id, () => 'stop')
+    expect(run.asked).toHaveLength(1)
+    expect(run.detail.error).toBe('stopped')
+    expect(run.detail.live).toBeUndefined()
+    expect(app.server.calls).toEqual([])
+    expect(run.detail.messages.filter(message => message.role === 'tool').at(-1)!.text).toContain('stopped')
+  })
+
+  it('offers GitHub only to picked messages once automatic use is off, and says why when it cannot', async () => {
+    const app = await connected()
+    await app.service.updateApps({ githubAuto: false })
+    let chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Plain question')
+    chat = await settled(app.service, chat.conversation.id)
+    expect(chatRequests(app.adapter).at(-1)!.tools).not.toContain('use_github')
+    const requestId = randomUUID()
+    await app.service.send({ conversationId: chat.conversation.id, requestId, branchId: chat.conversation.selectedBranchId, text: 'Check my repos', model: route, github: true })
+    chat = await settled(app.service, chat.conversation.id)
+    let last = chatRequests(app.adapter).at(-1)!
+    expect(last.tools).toContain('use_github')
+    expect(JSON.stringify(last.messages)).toContain('[The user chose GitHub for this message')
+    await expect(app.service.send({ conversationId: chat.conversation.id, requestId, text: 'Check my repos', model: route })).rejects.toThrow('already used for another message')
+    await app.service.disconnectGitHub()
+    await send(app.service, chat, 'Check again', { github: true })
+    await settled(app.service, chat.conversation.id)
+    last = chatRequests(app.adapter).at(-1)!
+    expect(last.tools).not.toContain('use_github')
+    expect(last.system).toContain('The user chose GitHub, but it is unavailable: no GitHub account is connected')
   })
 })
 

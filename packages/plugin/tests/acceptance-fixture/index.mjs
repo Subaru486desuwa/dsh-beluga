@@ -65,6 +65,20 @@ export function apply(ctx) {
         yield { type: 'finish', reason: { kind: options.system?.includes('used its tool budget') ? 'stop' : 'tool-calls' } }
         return
       }
+      // `GITHUB <tool> <arguments>` loads that GitHub tool, calls it, then reports what came back.
+      const github = /^GITHUB (\w+) (\{.*\})$/u.exec(question.split('\n')[0])
+      if (github) {
+        const step = options.messages.length - 1 - options.messages.lastIndexOf(asked)
+        const call = step === 0 ? { name: 'use_github', arguments: { tools: [github[1]] } } : step === 2 ? { name: 'github__' + github[1], arguments: JSON.parse(github[2]) } : undefined
+        if (call) {
+          yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: randomUUID(), name: call.name, arguments: JSON.stringify(call.arguments) } }
+          yield { type: 'finish', reason: { kind: 'tool-calls' } }
+          return
+        }
+        yield { type: 'text-delta', index: 0, text: 'GitHub answered: `' + JSON.stringify(last.content).slice(0, 160) + '`' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+        return
+      }
       // `THINK` streams reasoning before the answer, as a reasoning model does.
       if (last.role === 'user' && question.startsWith('THINK')) {
         for (const part of ['Weighing ', 'the question ', 'from both sides.']) { yield { type: 'reasoning-delta', index: 0, text: part }; await sleep(400) }

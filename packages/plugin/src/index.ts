@@ -8,3 +8,4 @@ export { validateDocument, type DocumentCheck, type DocumentInput, type Paragrap
 export { validatePresentation, type PresentationCheck, type PresentationInput, type Slide, type SlideImage, type SlideIssue } from './host/presentations.ts'
 export { reachesOutside, validateWorkbook, type CellChange, type ChartCheck, type WorkbookCell, type WorkbookChart, type WorkbookCheck, type WorkbookInput } from './host/workbooks.ts'
 export { officeFormat, type OfficeEngine } from './host/office-contract.ts'
+export type { ActionRisk, GitHubAccount, GitHubConnector, GitHubTool } from './host/github-contract.ts'
