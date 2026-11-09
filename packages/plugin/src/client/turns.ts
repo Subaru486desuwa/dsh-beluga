@@ -3,7 +3,7 @@
  * answer it. Tool calls and results stay in the history the model sees, but a person sees
  * only the reply, its files, its to-do list, how long it thought, and what it drew on or proposed to memory.
  */
-import type { BranchId, CandidateId, ChatBranch, ChatMessageView, ChatReference, Conversation, MemoryId, TodoItem, WebSource } from '../shared/types.ts'
+import type { BranchId, CandidateId, ChatBranch, ChatMessageView, ChatReference, Conversation, MemoryId, TodoItem, WebSource, WorkReference } from '../shared/types.ts'
 
 export interface ChatTurn {
   readonly key: string
@@ -25,6 +25,8 @@ export interface ChatTurn {
   readonly recalled: readonly MemoryId[]
   /** Earlier chats the turn found. */
   readonly referenced: readonly ChatReference[]
+  /** Work sessions the turn found or read. */
+  readonly work: readonly WorkReference[]
 }
 
 /** @returns the first value for each key, in first-seen order. */
@@ -56,6 +58,7 @@ export function turnsOf(messages: readonly ChatMessageView[]): ChatTurn[] {
       proposed: unique(rest.flatMap(message => message.proposed ?? []), id => id),
       recalled: unique(rest.flatMap(message => message.recalled ?? []), id => id),
       referenced: unique(rest.flatMap(message => message.referenced ?? []), chat => chat.conversationId),
+      work: unique(rest.flatMap(message => message.work ?? []), session => session.sessionId),
     }
   })
 }

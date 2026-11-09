@@ -41,7 +41,7 @@ Open **Chat** in the Harness sidebar and start a conversation. The chat's title 
 - Long chats keep their whole history in view. When a chat outgrows what one model request carries (`maxContextBytes`, 512 KiB by default, less for a model with a smaller context window), older tool results are left out first, then the model condenses the oldest turns in the background so later replies still know them.
 - Search titles and message bodies; rename, archive, or delete a Chat and its owned attachments. Archiving only hides a chat from the list: search still finds it, the model can still search it, and it still feeds the memory summary. Deleting is how Beluga forgets a chat. Archived chats are opened, unarchived or deleted in **Settings → Data controls**.
 - Pin a Chat to the top of the list, or export it as Markdown. Tool output and reasoning stay out of the export.
-- Replies list their sources beneath them: web pages, the saved memories they used, and earlier chats they found, which open on a click. The memory summary and custom instructions go with every reply and are not listed. Read aloud uses only voices on your device; without one it says so rather than sending text to a speech service.
+- Replies list their sources beneath them: web pages, the saved memories they used, earlier chats they found, which open on a click, and Work sessions they read, which open in Work. The memory summary and custom instructions go with every reply and are not listed. Read aloud uses only voices on your device; without one it says so rather than sending text to a speech service.
 - Upload text documents, extractable-text PDFs, and supported images. Scanned PDFs need OCR outside this plugin. Images require the explicit inline route below.
 - When Harness has a web provider, the model searches the web when a question needs it. Turn that off in **Settings → Apps**; then only a message sent with **Web search** picked from the + menu searches. Chat never receives shell, arbitrary filesystem or deployment tools.
 
@@ -66,6 +66,15 @@ The **memory summary** is an overview of you that the model writes from your nor
 Saved-memory text/JSON and instruction Markdown can be reviewed here. Importing `AGENTS.md` requires personal-scope review; it never edits the source file or Work rules. Do not import credentials. A conversation export does not automatically reconstruct ChatGPT's separate saved-memory store.
 
 While replying, the model can search your earlier chats and quote excerpts, which go to the selected model provider. Turn this off in Personalization. Temporary Chat and imported originals are not searched, while archived chats are; imported history reaches a model only when you continue it. Forgetting a memory does not delete the chat it came from, so the model may still find it there; delete that chat if needed.
+
+## Work crossings
+
+Chat and Work read nothing of each other until you turn a crossing on. **Settings → Apps → Work** has a switch for each:
+
+- **Let Work look up personal memory** gives the main agent of each Work session a read-only tool, `personal_memory_lookup`, that returns your saved memories and memory summary, filtered by words if it asks. It never returns your custom instructions or "about you". Calls from subagents or PTC code are refused. Each call and its result is logged in the Work session like any tool call.
+- **Read Work records in Chat** lets the chat model find Work sessions you started in the workspaces you tick, by time and words, and read what you and the agent said; tool calls, reasoning and notices Harness added are left out. One search reads at most the 50 newest sessions (`maxWorkSessions`) and needs no full-text session search in Harness. A reply lists the Work sessions it read beneath it; a click opens one in Work. What it reads is tool output: once a reply has read Work, it proposes nothing to memory, and the memory summary skips what the assistant said after it.
+
+**Hand off to Work**, in a chat's menu (in the header of a Temporary Chat), asks you for a workspace, then has the model write a task brief from the chat, without memory or custom instructions, and puts it in a new Work session's message box there for you to check and send. A draft already in that box is kept, with the brief added after it. Chat never starts or sends a Work session itself.
 
 ## Temporary Chat
 

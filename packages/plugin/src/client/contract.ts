@@ -1,5 +1,5 @@
 import type { InjectFace, PropsLocale, PropsRuntime, PropsStore, HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
-import type { AppsChange, ArchiveSelection, BranchId, ConversationId, ImportBatchId, Memory, MemorySource, MemoryCandidate, OfficePreview, PersonalProfile, ChatAttachment } from '../shared/types.ts'
+import type { AppsChange, ArchiveSelection, BranchId, ConversationId, ImportBatchId, Memory, MemorySource, MemoryCandidate, OfficePreview, PersonalProfile, ChatAttachment, WorkSessionRef, WorkspaceRef } from '../shared/types.ts'
 import type { ModelRef } from '../shared/models.ts'
 import type { createPersonalListStore, createPersonalViewStore } from './stores.ts'
 import type { ChatOrder } from './list.ts'
@@ -30,6 +30,12 @@ export interface PersonalCommands {
   chooseEffort(effort: string | undefined): void
   setWeb(web: boolean): void
   updateApps(change: AppsChange): Promise<boolean>
+  /** Write a brief from the open chat and put it in a new Work session's composer in `workspace`, for the person to send. */
+  handOff(workspace: WorkspaceRef): Promise<boolean>
+  /** Show a Work session a reply read. */
+  openWork(sessionId: WorkSessionRef): void
+  /** Read apps and Work workspaces again. */
+  refreshApps(): Promise<boolean>
   branch(messageId: string, action: 'edit' | 'regenerate' | 'fork', text?: string): Promise<boolean>
   removeAttachment(id: string): Promise<boolean>
   upload(file: File): Promise<ChatAttachment | undefined>

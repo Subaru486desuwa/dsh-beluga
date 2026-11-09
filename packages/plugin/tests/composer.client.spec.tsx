@@ -7,7 +7,7 @@ import { ModelPicker } from '../src/client/ModelPicker.tsx'
 import type { PersonalState } from '../src/client/model.ts'
 import type { PersonalCommands } from '../src/client/contract.ts'
 import type { ModelChoice } from '../src/shared/models.ts'
-import type { AppsView, CandidateId, ChatMessageView, ConversationDetail, ConversationId, MemoryCandidate, MemoryId, MemoryState } from '../src/shared/types.ts'
+import type { AppsView, CandidateId, ChatMessageView, ConversationDetail, ConversationId, MemoryCandidate, MemoryId, MemoryState, WorkSessionRef } from '../src/shared/types.ts'
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => (await import('./primitives-mock.tsx')).primitives())
 afterEach(cleanup)
 const t = ((key: string, params?: object) => key + (params ? ' ' + JSON.stringify(params) : '')) as never
@@ -90,7 +90,7 @@ describe('composer', () => {
   })
 })
 
-const apps = (web = true): AppsView => ({ web: { available: web, auto: true } })
+const apps = (web = true): AppsView => ({ web: { available: web, auto: true }, work: { memoryAvailable: false, recordsAvailable: false, memory: false, records: false, workspaces: [] } })
 describe('tools menu', () => {
   const open = () => { fireEvent.click(screen.getByRole('button', { name: 'tools' })); return screen.getAllByRole('menuitem').map(item => item.textContent) }
   it('offers web search only when Harness has a web provider', () => {
@@ -225,6 +225,16 @@ describe('what a reply proposed to memory and drew on', () => {
     expect(within(sources).queryByText(/gone/u)).toBeNull()
     fireEvent.click(within(sources).getByRole('button', { name: /Trip plan/u }))
     expect(commands.open).toHaveBeenCalledWith('old')
+  })
+  it('lists the Work sessions a reply found or read once each, and opens one in Work', () => {
+    const work = [{ sessionId: 's-1' as WorkSessionRef, title: 'Fix login' }]
+    const openWork = vi.fn()
+    render(<ChatMessages state={thread([message('u', 'user', 'Today?'), message('t1', 'tool', '{}', { work }), message('t2', 'tool', '{}', { work }), message('a', 'assistant', 'You fixed login.')])} commands={{ openWork } as unknown as PersonalCommands} t={t} />)
+    const sources = screen.getByRole('navigation', { name: 'sources' })
+    const session = within(sources).getByRole('button', { name: 'sourceWorkFix login' })
+    expect(within(sources).getAllByRole('button')).toHaveLength(1)
+    fireEvent.click(session)
+    expect(openWork).toHaveBeenCalledWith('s-1')
   })
   it('shows neither before memory has loaded', () => {
     render(<ChatMessages state={thread(replied)} commands={{} as PersonalCommands} t={t} />)

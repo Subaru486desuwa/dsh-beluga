@@ -3,8 +3,8 @@ import remote from '../lib/typert.remote-client.js'
 
 describe('published Remote contract', () => {
   it('exposes streaming methods and strict request validation', () => {
-    expect(Object.keys(remote.methods)).toHaveLength(41)
-    for (const name of ['apps', 'updateApps']) expect(remote.methods).toHaveProperty('personalChat/' + name)
+    expect(Object.keys(remote.methods)).toHaveLength(42)
+    for (const name of ['apps', 'updateApps', 'handOff']) expect(remote.methods).toHaveProperty('personalChat/' + name)
     for (const name of ['refreshSummary', 'askSummary', 'editSummary', 'undoSummary', 'clearSummary', 'summaryOptions']) expect(remote.methods).toHaveProperty('personalChat/' + name)
     const edit = remote.methods['personalChat/editSummary'].input({ strict: true }).create()
     expect(() => edit.parse({ request: { text: 'x' } })).toThrow()

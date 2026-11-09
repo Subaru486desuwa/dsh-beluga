@@ -37,7 +37,7 @@ _Avoid_: plan、todos、计划、进度日志
 _Avoid_: 记忆摘要（那是跨聊天的）、省略消息、截断、compaction summary
 
 **Sources（来源）**:
-一条回复下列出的、这个回合用到的材料：网页、调取到的 Saved Memory 和引用的过去 Chat。Memory Summary 与 Custom Instructions 每个回合都在用，不逐条列出。
+一条回复下列出的、这个回合用到的材料：网页、调取到的 Saved Memory、引用的过去 Chat 和 Work Records。Memory Summary 与 Custom Instructions 每个回合都在用，不逐条列出。
 _Avoid_: citations、引用、参考资料
 
 ## 项目
@@ -85,7 +85,7 @@ _Avoid_: 隐私信息、PII
 ## 应用
 
 **App（应用）**:
-回合中可供模型使用的服务，目前是网页搜索。用户在设置的“应用”页决定模型能否在需要时自动使用它；关闭后，只有从 + 菜单选了它的消息才会用。
+回合中可供模型使用的服务，目前是网页搜索和 Work Records。用户在设置的“应用”页决定模型能否在需要时自动使用它；关闭后，只有从 + 菜单选了它的消息才会用。
 _Avoid_: connector、连接器、integration
 
 **Work Records（Work 记录）**:

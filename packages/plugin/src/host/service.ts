@@ -13,6 +13,8 @@ import { PersonalMemory } from './personal-memory.ts'
 import { MemorySummaries, SUMMARY_CHECK_MS } from './memory-summary.ts'
 import { Condenser } from './condense.ts'
 import { Titles } from './titles.ts'
+import { HandOff } from './handoff.ts'
+import { offerMemoryLookup } from './work-memory.ts'
 import { PersonalStore } from './storage.ts'
 import { textOf, type ChatEntry, type ConversationRecord } from './records.ts'
 import { Turns } from './turns.ts'
@@ -21,7 +23,7 @@ import { AssetRepository } from './assets.ts'
 import { decodeBase64 } from './base64.ts'
 import { ModelBridge } from './model-bridge.ts'
 import { routeKey, sameRoute, type ModelChoice, type ModelRef } from '../shared/models.ts'
-import type { AppsChange, AppsView, ArchiveRevisionId, ArchiveSelection, BranchId, BranchRequest, CandidateId, CandidateInput, ChatBranch, Conversation, ConversationDetail, ConversationId, ConversationSummary, OfficePreview, UploadLimits, ImportBatch, ImportBatchId, ImportPreview, ImportPreviewId, ImportResult, ImportUndoResult, Memory, MemoryCandidate, MemoryId, MemoryState, MemorySummaryView, PersonalChatOperations, PersonalProfile, ProfileImportSource, ChatAttachment, ChatUpdate, PersonalChange } from '../shared/types.ts'
+import type { AppsChange, AppsView, ArchiveRevisionId, ArchiveSelection, BranchId, BranchRequest, CandidateId, CandidateInput, ChatBranch, Conversation, ConversationDetail, ConversationId, ConversationSummary, OfficePreview, UploadLimits, ImportBatch, ImportBatchId, ImportPreview, ImportPreviewId, ImportResult, ImportUndoResult, Memory, MemoryCandidate, MemoryId, MemoryState, MemorySummaryView, PersonalChatOperations, PersonalProfile, ProfileImportSource, ChatAttachment, ChatUpdate, PersonalChange, WorkspaceRef } from '../shared/types.ts'
 export type * from '../shared/types.ts'
 
 /** The kit gives up at 60 s per operation; this also covers the wait for a turn behind it. */
@@ -44,8 +46,9 @@ export class PersonalChatService extends TypertRemoteService implements Personal
   private summaries!: MemorySummaries
   private imports!: Imports
   private turns!: Turns
-  /** Web search and connected apps; the Remote method `apps` reports them. */
+  /** Web search, connected apps and Work crossings; the Remote method `apps` reports them. */
   private integrations!: Apps
+  private handOffs!: HandOff
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'personalChat', { namespace: 'personalChat' })
@@ -59,10 +62,14 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     this.memory = new PersonalMemory(chats, this.config)
     const summaries = this.summaries = new MemorySummaries(chats, this.bridge, this.config)
     this.imports = new Imports(chats, this.config)
-    const apps = this.integrations = new Apps(this.ctx, chats.domain)
+    const apps = this.integrations = new Apps(this.ctx, chats.domain, this.config)
     const condenser = new Condenser(chats, this.bridge, this.config, message => this.ctx.logger.warn(message))
     const titles = new Titles(chats, this.bridge, this.config, message => this.ctx.logger.warn(message))
-    this.turns = new Turns(this.ctx, chats, this.memory, summaries, this.assets, this.bridge, apps, condenser, titles, this.config)
+    const handOffs = this.handOffs = new HandOff(chats, this.bridge, this.config)
+    this.turns = new Turns(this.ctx, chats, this.memory, summaries, this.assets, this.bridge, apps, condenser, titles, apps.work, this.config)
+    // Work agents exist only where the profile runs them; the tool follows those services and the setting (ADR 0006).
+    const memory = this.memory
+    this.ctx.inject(['tools', 'agents'], scope => { offerMemoryLookup(scope, { saved: query => memory.saved(query), summary: () => summaries.current() }, this.config.maxWorkBytes, () => apps.settings().workMemory, listener => apps.watch(listener)) })
     this.ctx.effect(() => async () => {
       await chats.drain()
       this.imports.clear()
@@ -85,7 +92,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     this.ctx.effect(() => () => clearInterval(interval))
     const summaryCheck = setInterval(() => { summaries.tick() }, SUMMARY_CHECK_MS)
     summaryCheck.unref()
-    this.ctx.effect(() => () => { clearInterval(summaryCheck); summaries.dispose(); condenser.dispose(); titles.dispose() })
+    this.ctx.effect(() => () => { clearInterval(summaryCheck); summaries.dispose(); condenser.dispose(); titles.dispose(); handOffs.dispose() })
   }
   private owner(): void {
     if (this.chats.closing) throw new PersonalChatError('unavailable', 'Personal Chat is shutting down')
@@ -299,13 +306,19 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     if (!await this.bridge.available(model)) throw new PersonalChatError('model-unavailable', 'Select an available configured model')
     if (!await this.bridge.takesEffort(model)) throw new PersonalChatError('effort-unavailable', 'Select a reasoning effort this model offers')
   }
-  /** Web search, with its setting. */
+  /** Web search and Work crossings, with their settings. */
   @Remote async apps(): Promise<AppsView> { this.owner(); return this.integrations.view() }
   @Remote async updateApps(request: AppsChange): Promise<AppsView> {
     this.owner()
-    const change = z.object({ webAuto: z.boolean().optional() }).strict().parse(request)
+    const change = z.object({ webAuto: z.boolean().optional(), workMemory: z.boolean().optional(), workRecords: z.boolean().optional(), workWorkspaces: z.array(z.string().min(1).max(200).transform(brandString<WorkspaceRef>)).max(500).optional() }).strict().parse(request)
     await this.chats.serial(() => this.integrations.update(Object.fromEntries(Object.entries(change).filter(([, value]) => value !== undefined))))
     return this.integrations.view()
+  }
+  /** Write a task brief from the chat; the person sends it to a new Work session themselves. */
+  @Remote async handOff(request: { readonly conversationId: ConversationId }): Promise<{ readonly brief: string }> {
+    this.owner()
+    this.chats.find(request.conversationId)
+    return { brief: await this.handOffs.brief(request.conversationId) }
   }
   /** Cancel the provider and in-flight tools, then return the settled prefix. */
   @Remote async stop(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail> {

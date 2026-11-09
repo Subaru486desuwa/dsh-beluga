@@ -3,7 +3,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { applySummaryChanges, askInstructions, collectMaterial, fitSummary, newestUnread, parseSummaryReply, scrubSummary, updateInstructions } from '../src/host/memory-summary.ts'
 import type { ChatEntry, ConversationRecord } from '../src/host/records.ts'
-import type { BranchId, ConversationId } from '../src/shared/types.ts'
+import type { BranchId, ConversationId, WorkSessionRef } from '../src/shared/types.ts'
 
 function entry(id: string, role: 'user' | 'assistant' | 'tool', text: string, time: number): ChatEntry {
   const content = [{ type: 'text' as const, text }]
@@ -33,6 +33,22 @@ describe('what the summary reads', () => {
     expect(material.progress).toEqual({ a: 5 })
     expect(material.remaining).toBe(false)
     expect(collectMaterial([record], material.progress, 10_000)).toEqual({ text: '', progress: { a: 5 }, remaining: false })
+  })
+  it('skips what the assistant said after reading a Work session, until the person speaks again', () => {
+    const read = { ...entry('t1', 'tool', '{"messages":[]}', day + 2), work: [{ sessionId: brandString<WorkSessionRef>('s-1'), title: 'Fix login' }] }
+    const record = chat('a', 'Status', [
+      entry('u1', 'user', 'What did I do today?', day),
+      entry('a1', 'assistant', 'Let me look.', day + 1),
+      read,
+      entry('a2', 'assistant', 'You fixed the login token refresh.', day + 3),
+      entry('u2', 'user', 'I prefer short status reports', day + 4),
+      entry('a3', 'assistant', 'Got it.', day + 5),
+    ])
+    const text = collectMaterial([record], {}, 10_000).text
+    expect(text).toContain('Let me look.')
+    expect(text).not.toContain('login')
+    expect(text).toContain('User: I prefer short status reports')
+    expect(text).toContain('Got it.')
   })
   it('continues where the limit stopped it, chat by chat', () => {
     const first = chat('a', 'First', [entry('u1', 'user', 'x'.repeat(300), day), entry('u2', 'user', 'y'.repeat(300), day + 1)])

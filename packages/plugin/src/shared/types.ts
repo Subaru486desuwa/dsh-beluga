@@ -10,6 +10,10 @@ export type ImportBatchId = Branded<'PersonalImportBatchId'>
 export type ImportPreviewId = Branded<'PersonalImportPreviewId'>
 export type MemoryId = Branded<'PersonalMemoryId'>
 export type CandidateId = Branded<'PersonalCandidateId'>
+/** A Work workspace, as Harness names it. */
+export type WorkspaceRef = Branded<'PersonalWorkspaceRef'>
+/** A Work session, as Harness names it. */
+export type WorkSessionRef = Branded<'PersonalWorkSessionRef'>
 
 export interface ArchiveSelection { readonly revisionId: ArchiveRevisionId; readonly nodeId: string }
 export interface ChatBranch {
@@ -128,6 +132,13 @@ export interface ChatMessageView {
   readonly recalled?: readonly MemoryId[]
   /** Earlier chats this message found, with their current titles; deleted chats are left out. */
   readonly referenced?: readonly ChatReference[]
+  /** Work sessions this message read, with their titles at the time. */
+  readonly work?: readonly WorkReference[]
+}
+/** A Work session a reply read. */
+export interface WorkReference {
+  readonly sessionId: WorkSessionRef
+  readonly title: string
 }
 /** An earlier chat a reply found by searching. */
 export interface ChatReference {
@@ -291,14 +302,38 @@ export interface UploadLimits { readonly uploadBytes: number; readonly attachmen
   /** Whether the Office extension can render files here. */
   readonly office: boolean
 }
-/** Web search as the Apps page shows it. */
+/** Web search and Work crossings as the Apps page shows them. */
 export interface AppsView {
   /** Web search and page reading through the Harness web provider; `auto` lets the model use them unasked. */
   readonly web: { readonly available: boolean; readonly auto: boolean }
+  /** Where Chat and Work reach each other; each crossing starts off. */
+  readonly work: {
+    /** Whether this Harness runs Work agents that can be offered a tool. */
+    readonly memoryAvailable: boolean
+    /** Whether this Harness can read Work sessions. */
+    readonly recordsAvailable: boolean
+    /** Top-level Work agents may look up Saved Memories and the Memory Summary. */
+    readonly memory: boolean
+    /** Chat may read Work sessions of the allowed workspaces. */
+    readonly records: boolean
+    /** Every Work workspace; `allowed` ones are those Chat may read. */
+    readonly workspaces: readonly WorkspaceView[]
+  }
+}
+/** A Work workspace as the Apps page and the hand-off show it. */
+export interface WorkspaceView {
+  readonly id: WorkspaceRef
+  readonly title: string
+  readonly path: string
+  readonly allowed: boolean
 }
 /** Settings the Apps page changes; absent fields stay as they are. */
 export interface AppsChange {
   readonly webAuto?: boolean
+  readonly workMemory?: boolean
+  readonly workRecords?: boolean
+  /** The workspaces Chat may read; it replaces the earlier list. */
+  readonly workWorkspaces?: readonly WorkspaceRef[]
 }
 export interface PersonalChatOperations {
   limits(): Promise<UploadLimits>
@@ -350,6 +385,8 @@ export interface PersonalChatOperations {
   summaryOptions(request: { readonly conversationId?: ConversationId; readonly model?: ModelRef; readonly sensitive: boolean }): Promise<MemorySummaryView>
   apps(): Promise<AppsView>
   updateApps(request: AppsChange): Promise<AppsView>
+  /** Write a task brief from the chat, for the person to send to a new Work session. */
+  handOff(request: { readonly conversationId: ConversationId }): Promise<{ readonly brief: string }>
 }
 
 declare module '@deepseek-ai/dsh-typert-protocol' {

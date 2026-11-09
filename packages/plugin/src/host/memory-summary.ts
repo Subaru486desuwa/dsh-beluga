@@ -57,7 +57,7 @@ export interface Material {
 /**
  * Excerpts of what the summary has not read: user and assistant text on each chat's kept branch.
  * Assistant lines are labelled as context, not the person's words.
- * Tool output and replaced branches are skipped, so they never reach the summary.
+ * Tool output, assistant text after a Work session was read in that turn, and replaced branches are skipped, so they never reach the summary.
  */
 export function collectMaterial(records: readonly ConversationRecord[], progress: Readonly<Record<string, number>>, limit: number): Material {
   // Only chats with something read are kept, so imported chats without Beluga turns add nothing to the record.
@@ -70,10 +70,14 @@ export function collectMaterial(records: readonly ConversationRecord[], progress
     const lines: string[] = []
     let read = next[id] ?? 0
     let first: number | undefined
+    // Replies after a Work session was read can retell it, and nothing learns from Work (ADR 0006).
+    let drewOnWork = false
     for (; read < record.entries.length; read++) {
       const entry = record.entries[read]!
       const role = entry.message.role
-      const text = role === 'user' ? entry.userText ?? textOf(entry.message) : role === 'assistant' ? textOf(entry.message) : ''
+      if (role === 'user') drewOnWork = false
+      else if (entry.work?.length) drewOnWork = true
+      const text = role === 'user' ? entry.userText ?? textOf(entry.message) : role === 'assistant' && !drewOnWork ? textOf(entry.message) : ''
       if (!kept.has(entry.id) || !text.trim()) continue
       const line = (role === 'user' ? 'User: ' + clip(text.trim(), USER_CHARS) : ASSISTANT_LABEL + clip(text.trim(), ASSISTANT_CHARS)).replace(/\n{3,}/gu, '\n\n')
       if (used + bytes(line) + 1 > limit) break

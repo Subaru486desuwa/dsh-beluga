@@ -17,6 +17,8 @@ import { zipSync } from 'fflate'
 import { currentExport, fixture } from './fixtures/chatgpt.ts'
 import { pdf } from './fixtures/pdf.ts'
 import { wordDocument, workbook } from './office-fixtures.ts'
+import { fakeWork, workday } from './work-fixtures.ts'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 
 const route = { provider: 'fixture', model: 'echo' }
 /** Long enough for the Office engine to start and open a file. */
@@ -1524,5 +1526,98 @@ describe('automatic titles', () => {
     await new Promise(resolve => setTimeout(resolve, 50))
     expect(titleRequests(app)).toEqual([])
     expect((await conversation(app, chat.conversation.id)).title).toBe('WAIT for it')
+  })
+})
+
+/** The Work side of one Harness: a tool registry and the main agent, plus sessions in two workspaces. */
+function provideWork(app: Awaited<ReturnType<typeof setup>>) {
+  const registered = new Map<string, ToolDefinition>()
+  const guards = new Set<unknown>()
+  const tools = { register: (definition: ToolDefinition) => { registered.set(definition.name, definition); return () => { registered.delete(definition.name) } }, guard: (guard: unknown) => { guards.add(guard); return () => { guards.delete(guard) } } }
+  const main = { session: { header: {} } }
+  const work = fakeWork(workday())
+  app.ctx.provide('tools', tools as never)
+  app.ctx.provide('agents', { roots: () => [main] } as never)
+  app.ctx.provide('sessionQuery', work.query as never)
+  app.ctx.provide('workspaceRegistry', work.registry as never)
+  return { registered, guards, main }
+}
+const toolTexts = (detail: ConversationDetail) => detail.messages.filter(item => item.role === 'tool').map(item => item.text)
+
+describe('Work crossings', () => {
+  it('starts with every crossing off: Work gets no tool and Chat reads no Work', async () => {
+    const app = await setup()
+    const work = provideWork(app)
+    expect((await app.service.apps()).work).toEqual({ memoryAvailable: true, recordsAvailable: true, memory: false, records: false, workspaces: [{ id: 'w-alpha', title: 'Alpha', path: '/projects/alpha', allowed: false }, { id: 'w-beta', title: 'Beta', path: '/projects/beta', allowed: false }] })
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Hello')
+    await settled(app.service, chat.conversation.id)
+    const request = app.adapter.requests.at(-1)!
+    expect(request.tools).not.toContain('search_work')
+    expect(request.system).toContain('cannot start or change Work sessions')
+    expect(request.system).not.toContain('records of the user')
+    expect(work.registered.size).toBe(0)
+    await app.service.updateApps({ workRecords: true })
+    await send(app.service, await app.service.get({ conversationId: chat.conversation.id }), 'Again')
+    await settled(app.service, chat.conversation.id)
+    expect(app.adapter.requests.at(-1)!.tools).not.toContain('search_work')
+  })
+  it('offers the main Work agent Saved Memories and the Memory Summary while the person keeps it on, never custom instructions', async () => {
+    const app = await setup()
+    await app.service.updateProfile({ expectedRevision: 0, background: 'PRIVATE_PROFILE_MARKER', instructions: 'PRIVATE_INSTRUCTIONS_MARKER', autoSaveLowRisk: true, referenceChats: true })
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Remember: I prefer concise answers')
+    await settled(app.service, chat.conversation.id)
+    const work = provideWork(app)
+    await app.service.updateApps({ workMemory: true })
+    await vi.waitFor(() => { expect([...work.registered.keys()]).toEqual(['personal_memory_lookup']) })
+    expect(work.guards.size).toBe(1)
+    const result = await work.registered.get('personal_memory_lookup')!.execute({}, {} as never)
+    expect(result).toEqual({ memories: [{ text: 'I prefer concise answers', category: 'preference' }], summary: '' })
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE_/u)
+    await app.service.updateApps({ workMemory: false })
+    await vi.waitFor(() => { expect(work.registered.size).toBe(0) })
+    expect(work.guards.size).toBe(0)
+  })
+  it('reads allowed Work sessions in a reply, lists them under it, and proposes nothing to memory after', async () => {
+    const app = await setup()
+    provideWork(app)
+    await expect(app.service.updateApps({ workRecords: true, workWorkspaces: [brandString('w-gone')] })).rejects.toMatchObject({ reason: 'workspace-not-found' })
+    await app.service.updateApps({ workRecords: true, workWorkspaces: [brandString('w-alpha'), brandString('w-alpha')] })
+    expect((await app.service.apps()).work.workspaces.filter(item => item.allowed).map(item => item.id)).toEqual(['w-alpha'])
+    app.adapter.script.push({ name: 'search_work', arguments: { since: '2026-11-09' } }, { name: 'read_work', arguments: { sessionId: 's-login' } }, { name: 'read_work', arguments: { sessionId: 's-beta' } }, { name: 'memory_propose', arguments: { text: 'I fixed the login bug', category: 'fact' } })
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'What did I do today?')
+    const done = await settled(app.service, chat.conversation.id)
+    const first = app.adapter.requests.find(request => request.tools.includes('search_work'))!
+    expect(first.tools).toContain('read_work')
+    expect(first.system).toContain('records of the user')
+    const [search, read, refused, proposed] = toolTexts(done)
+    expect(search).toContain('Fix login')
+    expect(search).not.toMatch(/Beta|Helper|Old cleanup/u)
+    expect(read).toContain('Fixed the token refresh and added a test')
+    expect(read).not.toContain('Goal reminder')
+    expect(refused).toContain('work-session-unavailable')
+    expect(proposed).toContain('memory-after-work')
+    expect(done.messages.flatMap(item => item.work ?? [])).toEqual([{ sessionId: 's-login', title: 'Fix login' }, { sessionId: 's-login', title: 'Fix login' }])
+    const memory = await app.service.memoryState({})
+    expect(memory.candidates).toEqual([])
+    expect(memory.memories).toEqual([])
+  })
+  it('writes a hand-off brief from the chat alone, with no personal instructions', async () => {
+    const app = await setup()
+    await app.service.updateProfile({ expectedRevision: 0, background: 'PRIVATE_PROFILE_MARKER', instructions: 'PRIVATE_INSTRUCTIONS_MARKER', autoSaveLowRisk: true, referenceChats: true })
+    const empty = await app.service.create({ temporary: false })
+    await expect(app.service.handOff({ conversationId: empty.conversation.id })).rejects.toMatchObject({ reason: 'empty-chat' })
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Plan a refactor of the parser')
+    await settled(app.service, chat.conversation.id)
+    const { brief } = await app.service.handOff({ conversationId: chat.conversation.id })
+    expect(brief).toContain('Plan a refactor of the parser')
+    const request = app.adapter.requests.at(-1)!
+    expect(request.system).toMatch(/^You write task briefs/u)
+    expect(request.tools).toEqual([])
+    expect(JSON.stringify(request.messages)).not.toMatch(/PRIVATE_/u)
+    expect(request.effort).toBe('high')
   })
 })

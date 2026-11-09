@@ -19,6 +19,8 @@ export interface ListMarks {
 export interface RunningTurn {
   /** Notes for the result of the tool call being run, stored with that result. */
   pendingNotes?: { readonly callId: string; readonly notes: ToolNotes }
+  /** This reply read Work sessions, so it proposes nothing to memory from here on. */
+  readWork?: boolean
   /** Saved Memories given to this turn as context, noted on its reply. */
   recalled: readonly MemoryId[]
   pendingDocument?: { callId: string; id: string; name: string; bytes: Uint8Array; artifact: NonNullable<ChatAttachment["artifact"]> }
@@ -174,7 +176,7 @@ export class Conversations {
       const reasoning = entry.message.content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
       const todos = todosOf(entry.message)
       return { id, role, text: entry.userText ?? textOf(entry.message), ...(reasoning ? { reasoning } : {}), ...(entry.thinkingMs === undefined ? {} : { thinkingMs: entry.thinkingMs }), time: entry.time, attachmentIds: entry.attachmentIds, toolNames: entry.message.content.filter(block => block.type === 'tool-call').map(block => block.name), ...(todos ? { todos } : {}), ...(entry.sources ? { sources: entry.sources } : {}), ...(entry.proposed ? { proposed: entry.proposed } : {}), ...(entry.recalled ? { recalled: entry.recalled } : {}),
-        ...(entry.referenced ? { referenced: entry.referenced.flatMap(conversationId => { const title = titles.get(conversationId); return title === undefined ? [] : [{ conversationId, title }] }) } : {}) }
+        ...(entry.referenced ? { referenced: entry.referenced.flatMap(conversationId => { const title = titles.get(conversationId); return title === undefined ? [] : [{ conversationId, title }] }) } : {}), ...(entry.work ? { work: entry.work } : {}) }
     })
     const running = this.running.get(conversation.id)
     const live: LiveTurn | undefined = running && running.branchId === branch?.id ? { id: running.id, branchId: running.branchId, text: running.text, reasoning: running.reasoning, stepElapsedMs: Math.max(0, Date.now() - running.stepStarted), ...(running.tool ? { tool: running.tool } : {}) } : undefined

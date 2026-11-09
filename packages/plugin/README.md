@@ -26,7 +26,7 @@ Open **Chat** in the Harness sidebar. Choose a configured model and start a conv
 - Stream replies, stop generation, copy messages, edit a user message or regenerate an answer. Old branches remain selectable.
 - Search titles and message bodies; rename, archive/restore, or delete a Chat and its owned attachments.
 - Pin a Chat to the top of the list, or export it as Markdown. Tool output and reasoning stay out of the export.
-- Replies list the web pages, saved memories and earlier chats they used beneath them. Read aloud uses only voices on your device; without one it says so rather than sending text to a speech service.
+- Replies list the web pages, saved memories, earlier chats and Work sessions they used beneath them. Read aloud uses only voices on your device; without one it says so rather than sending text to a speech service.
 - Upload text documents, extractable-text PDFs, and supported images. Scanned PDFs need OCR outside this plugin. Images require the explicit inline route below.
 - Web access is off by default. Turn it on for a request to use an existing Harness web provider; Chat never receives shell, arbitrary filesystem or deployment tools.
 
@@ -49,6 +49,14 @@ Defaults: 64 MiB upload (for a ZIP, once media is left out), 256 MiB extracted c
 Saved-memory text/JSON and instruction Markdown can be reviewed here. Importing `AGENTS.md` requires personal-scope review; it never edits the source file or Work rules. Do not import credentials. A conversation export does not automatically reconstruct ChatGPT's separate saved-memory store.
 
 While replying, the model can search your earlier chats and quote excerpts, which go to the selected model provider. Turn this off on the Memory page. Temporary Chat, archived chats and imported originals are not searched; imported history reaches a model only when you continue it. Forgetting a memory does not delete the chat it came from, so the model may still find it there; delete that chat if needed.
+
+## Work crossings
+
+Chat and Work read nothing of each other until a switch under **Settings → Apps → Work** is turned on; both start off.
+
+- **Memory Lookup** registers `personal_memory_lookup`, a read-only tool for the main agent of a Work session. It returns saved memories and the memory summary, never custom instructions or the background. Subagents and PTC code are refused.
+- **Work Records** lets the chat model search and read Work sessions you started in the workspaces you tick: only what you and the agent said, at most the 50 newest sessions per search (`maxWorkSessions`), at most `maxWorkBytes` per result. A reply that read Work proposes nothing to memory, and the memory summary skips what the assistant said after it.
+- **Hand off to Work**, in the chat menu, writes a task brief from the chat without memory or instructions and puts it in a new Work session's message box in the workspace you choose. You send it; Chat never starts a Work session itself.
 
 ## Temporary Chat
 

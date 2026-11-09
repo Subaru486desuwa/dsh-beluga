@@ -24,7 +24,7 @@ export interface PersonalState {
   /** Tools picked from the tools menu for the next messages. */
   readonly web: boolean
   readonly limits?: UploadLimits
-  /** Web search, as the Apps settings and the tools menu show it. */
+  /** Web search and Work crossings, as the Apps settings and the tools menu show them. */
   readonly apps?: AppsView
   /** The route and effort the next message goes with. */
   readonly selectedModel: ModelRef | undefined
@@ -290,6 +290,14 @@ export class PersonalModel {
     this.patch({ imports, archivedChats })
   }
   async updateApps(change: AppsChange): Promise<void> { this.patch({ apps: await this.api.updateApps(change) }) }
+  /** @returns a brief the Host wrote from the open chat, for a new Work session. */
+  async brief(): Promise<string> {
+    const conversation = this.state.getSnapshot().detail?.conversation
+    if (!conversation) throw new Error('Open a chat first')
+    return (await this.api.handOff({ conversationId: conversation.id })).brief
+  }
+  /** Read Work workspaces again, as the hand-off lists them. */
+  async loadApps(): Promise<void> { this.patch({ apps: await this.api.apps() }) }
   /** @param announce - offer Undo for a memory another chat saved on its own; the open chat shows its own under the reply. */
   async refreshMemory(announce: boolean): Promise<void> {
     if (this.state.getSnapshot().detail?.conversation.temporary) return

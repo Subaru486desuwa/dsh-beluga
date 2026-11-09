@@ -66,6 +66,7 @@ function mountView(ctx: Context): void {
     refreshSummary: request => unwrap(remote.refreshSummary(request)), askSummary: request => unwrap(remote.askSummary(request)), editSummary: request => unwrap(remote.editSummary(request)), undoSummary: request => unwrap(remote.undoSummary(request)),
     clearSummary: request => unwrap(remote.clearSummary(request)), summaryOptions: request => unwrap(remote.summaryOptions(request)),
     apps: () => unwrap(remote.apps()), updateApps: request => unwrap(remote.updateApps(request)),
+    handOff: request => unwrap(remote.handOff(request)),
   }
   const instance = new PersonalModel(api)
   model = instance
@@ -92,6 +93,22 @@ function mountView(ctx: Context): void {
     preview: file => instance.run(async () => { await instance.preview(file.name, bytesBase64(await exportUpload(file, instance.state.getSnapshot().limits))) }), discardPreview: () => instance.discardPreview(),
     commitImport: () => instance.run(() => instance.commitImport(), 'importComplete'), undoImport: id => instance.run(() => instance.undoImport(id)),
     updateApps: change => instance.run(() => instance.updateApps(change), 'changed'),
+    // Work's navigation opens the session and then reveals Work itself. Selecting a panel here would
+    // abort the pending navigation that `startSession` begins, leaving the brief unwritten.
+    handOff: workspace => instance.run(async () => {
+      const work = ctx.get('uiWorkspace')
+      if (!work) throw new Error(ctx.locale.bind('personalChat')('workUnavailable'))
+      const prompt = await instance.brief()
+      work.startSession(workspace, { prompt, whenDraftExists: 'append' })
+    }),
+    refreshApps: () => instance.run(() => instance.loadApps()),
+    openWork: sessionId => {
+      void instance.run(async () => {
+        const work = ctx.get('uiWorkspace')
+        if (!work) throw new Error(ctx.locale.bind('personalChat')('workUnavailable'))
+        work.openSession(sessionId)
+      })
+    },
     retry: () => { void instance.refresh() },
     dismissNotice: () => instance.dismissNotice(),
   }

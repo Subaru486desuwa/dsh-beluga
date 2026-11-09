@@ -1,6 +1,6 @@
 /** A chat as turns: the person's message, then one reply with its thinking, to-do list, files, memory proposals and sources. */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { Button, IconCheckCircleFillRegular, IconChevronDownOutlineRegular, IconChevronLeftOutlineRegular, IconChevronRightOutlineRegular, IconDeliverDocRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconFullscreenOutlineRegular, IconGlobeOutlineRegular, IconPersonalizationOutlineRegular, IconRefreshOutlineRegular, IconSearchOutlineRegular, ImageLightbox, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconCheckCircleFillRegular, IconChevronDownOutlineRegular, IconChevronLeftOutlineRegular, IconChevronRightOutlineRegular, IconCodeOutlineRegular, IconDeliverDocRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconFullscreenOutlineRegular, IconGlobeOutlineRegular, IconPersonalizationOutlineRegular, IconRefreshOutlineRegular, IconSearchOutlineRegular, ImageLightbox, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatAttachment, ConversationDetail, LiveTurn, Memory, MemoryCandidate, MemoryState, TodoItem } from '../shared/types.ts'
 import type { PersonalState } from './model.ts'
@@ -56,11 +56,12 @@ function MemoryProposals({ turn, memory, busy, commands, t }: { turn: ChatTurn; 
  */
 function Sources({ turn, memory, commands, t }: { turn: ChatTurn; memory: MemoryState | undefined; commands: PersonalCommands; t: T }) {
   const memories = turn.recalled.flatMap(id => memory?.memories.find(item => item.id === id) ?? [])
-  if (!turn.sources.length && !memories.length && !turn.referenced.length) return null
+  if (!turn.sources.length && !memories.length && !turn.referenced.length && !turn.work.length) return null
   return <nav className={css.sources} aria-label={t('sources')}>
     {turn.sources.map(source => <a key={source.url} href={source.url} target="_blank" rel="noreferrer noopener"><IconGlobeOutlineRegular size={14} /><span>{source.title || new URL(source.url).hostname}</span></a>)}
     {memories.map(item => <span key={item.id} title={item.text}><IconPersonalizationOutlineRegular size={14} /><span><span className={css.srOnly}>{t('sourceMemory')}</span>{item.text}</span></span>)}
     {turn.referenced.map(chat => <button key={chat.conversationId} type="button" onClick={() => { void commands.open(chat.conversationId) }}><IconSearchOutlineRegular size={14} /><span><span className={css.srOnly}>{t('sourceChat')}</span>{chat.title || t('newChat')}</span></button>)}
+    {turn.work.map(session => <button key={session.sessionId} type="button" onClick={() => { commands.openWork(session.sessionId) }}><IconCodeOutlineRegular size={14} /><span><span className={css.srOnly}>{t('sourceWork')}</span>{session.title}</span></button>)}
   </nav>
 }
 
