@@ -1,26 +1,40 @@
 import { archiveView, parseConversation, PersonalChatError, type ParsedArchive } from './archive.ts'
 import { Feed } from './feed.ts'
 import { Lru } from './lru.ts'
-import { textOf, type ConversationRecord } from './records.ts'
+import { proposingChats } from './memory.ts'
+import { textOf, type ConversationRecord, type ToolNotes } from './records.ts'
+import { todosOf } from './todos.ts'
 import type { Config } from './config.ts'
 import type { PersonalDomain } from './storage.ts'
 import type { ModelRef } from '../shared/models.ts'
-import type { ArchiveRevisionId, ArchiveSelection, BranchId, ChatAttachment, ChatUpdate, Conversation, ConversationDetail, ConversationId, LiveTurn, PersonalChange, WebSource } from '../shared/types.ts'
+import type { ArchiveRevisionId, ArchiveSelection, BranchId, ChatActivity, ChatAttachment, ChatUpdate, Conversation, ConversationDetail, ConversationId, LiveTurn, MemoryId, PersonalChange, WebSource } from '../shared/types.ts'
 
 /** Bounds the parsed imports held in memory, counted in nodes. */
 const CACHED_ARCHIVE_NODES = 20000
+/** Chats the list marks: turns that ended while no one had them open, and memory proposals waiting for the person. */
+export interface ListMarks {
+  readonly unseen: ReadonlySet<ConversationId>
+  readonly proposing: ReadonlySet<ConversationId>
+}
 export interface RunningTurn {
+  /** Notes for the result of the tool call being run, stored with that result. */
+  pendingNotes?: { readonly callId: string; readonly notes: ToolNotes }
+  /** Saved Memories given to this turn as context, noted on its reply. */
+  recalled: readonly MemoryId[]
   pendingDocument?: { callId: string; id: string; name: string; bytes: Uint8Array; artifact: NonNullable<ChatAttachment["artifact"]> }
   readonly id: string
   readonly branchId: BranchId
   readonly userId: string
   readonly model: ModelRef
-  readonly web: boolean
+  /** What the person picked for this message from the tools menu. */
+  readonly chosen: { readonly web: boolean }
   readonly controller: AbortController
   readonly sources: WebSource[]
   text: string
   reasoning: string
   tool?: string
+  /** When the current model step's request started, by the Host clock. */
+  stepStarted: number
   done: Promise<void>
   settled(): void
 }
@@ -80,6 +94,29 @@ export class Conversations {
     if (!feed) { feed = new Feed(); this.feeds.set(id, feed) }
     return feed
   }
+  /** @returns whether someone follows this chat now. */
+  following(id: ConversationId): boolean { return (this.feeds.get(id)?.subscriberCount ?? 0) > 0 }
+  /** @returns what the list marks, read once per listing. */
+  marks(): ListMarks {
+    return { unseen: new Set(this.domain.unseen.get()), proposing: proposingChats(this.domain.global.get().candidates) }
+  }
+  /**
+   * A running turn ranks first, then memory proposals waiting for the person, then a reply no one has seen.
+   * @param marks - what the list marks, from {@link marks}.
+   * @returns how much this chat needs the person now.
+   */
+  activity(id: ConversationId, marks: ListMarks): ChatActivity {
+    const turn = this.running.get(id)
+    if (turn) return 'running'
+    return marks.proposing.has(id) ? 'waiting' : marks.unseen.has(id) ? 'replied' : 'idle'
+  }
+  /** Record that a chat's last turn ended while no one had it open, or that someone opened it, and tell the list. */
+  async markUnseen(id: ConversationId, unseen: boolean): Promise<void> {
+    const ids = this.domain.unseen.get()
+    if (ids.includes(id) === unseen) return
+    await this.domain.unseen.set(unseen ? [...ids, id] : ids.filter(item => item !== id))
+    this.changes.publish({ kind: 'catalog' })
+  }
   raw(id: ConversationId): ConversationRecord | undefined { return this.temporary.get(id) ?? this.domain.conversation(id) }
   record(id: ConversationId): ConversationRecord {
     const record = this.raw(id)
@@ -127,17 +164,21 @@ export class Conversations {
     const record = this.record(conversation.id)
     const branch = conversation.branches.find(item => item.id === conversation.selectedBranchId)
     const entries = new Map(record.entries.map(entry => [entry.id, entry]))
+    const referenced = (branch?.messageIds ?? []).flatMap(id => entries.get(id)?.referenced ?? [])
+    const titles = referenced.length ? this.domain.titles(referenced) : new Map<ConversationId, string>()
     const messages = (branch?.messageIds ?? []).map(id => {
       const entry = entries.get(id)
       if (!entry) throw new PersonalChatError('invalid-storage', 'A branch refers to an unavailable message')
       const role = entry.message.role
       if (role !== 'user' && role !== 'assistant' && role !== 'tool') throw new PersonalChatError('invalid-storage', 'Unsupported chat message role')
       const reasoning = entry.message.content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
-      return { id, role, text: entry.userText ?? textOf(entry.message), ...(reasoning ? { reasoning } : {}), time: entry.time, attachmentIds: entry.attachmentIds, toolNames: entry.message.content.filter(block => block.type === 'tool-call').map(block => block.name), ...(entry.sources ? { sources: entry.sources } : {}) }
+      const todos = todosOf(entry.message)
+      return { id, role, text: entry.userText ?? textOf(entry.message), ...(reasoning ? { reasoning } : {}), ...(entry.thinkingMs === undefined ? {} : { thinkingMs: entry.thinkingMs }), time: entry.time, attachmentIds: entry.attachmentIds, toolNames: entry.message.content.filter(block => block.type === 'tool-call').map(block => block.name), ...(todos ? { todos } : {}), ...(entry.sources ? { sources: entry.sources } : {}), ...(entry.proposed ? { proposed: entry.proposed } : {}), ...(entry.recalled ? { recalled: entry.recalled } : {}),
+        ...(entry.referenced ? { referenced: entry.referenced.flatMap(conversationId => { const title = titles.get(conversationId); return title === undefined ? [] : [{ conversationId, title }] }) } : {}) }
     })
     const running = this.running.get(conversation.id)
-    const live: LiveTurn | undefined = running && running.branchId === branch?.id ? { id: running.id, branchId: running.branchId, text: running.text, reasoning: running.reasoning, ...(running.tool ? { tool: running.tool } : {}) } : undefined
-    return { conversation, messages, attachments: record.attachments, ...(live ? { live } : {}), ...(record.model ? { model: record.model } : {}), ...((record.error || (record.running && !running)) ? { error: record.error ?? 'interrupted' } : {}), omittedMessages: record.omittedMessages ?? 0, ...(conversation.selectedArchive ? { archive: archiveView(this.readArchive(conversation.selectedArchive.revisionId), conversation.selectedArchive.revisionId, conversation.selectedArchive.nodeId) } : {}) }
+    const live: LiveTurn | undefined = running && running.branchId === branch?.id ? { id: running.id, branchId: running.branchId, text: running.text, reasoning: running.reasoning, stepElapsedMs: Math.max(0, Date.now() - running.stepStarted), ...(running.tool ? { tool: running.tool } : {}) } : undefined
+    return { conversation, messages, attachments: record.attachments, ...(live ? { live } : {}), ...(record.model ? { model: record.model } : {}), ...((record.error || (record.running && !running)) ? { error: record.error ?? 'interrupted' } : {}), ...(conversation.selectedArchive ? { archive: archiveView(this.readArchive(conversation.selectedArchive.revisionId), conversation.selectedArchive.revisionId, conversation.selectedArchive.nodeId) } : {}) }
   }
   idle(id: ConversationId): void {
     if (this.running.has(id)) throw new PersonalChatError('busy', 'Stop the current response before changing branches')

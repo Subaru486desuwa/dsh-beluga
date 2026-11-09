@@ -19,7 +19,7 @@ export function FilePreview({ file, commands, onClose, t }: { file: ChatAttachme
     void currentCommands.current.previewFile(file.id, sheet).then(result => { if (active) setPreview(result) }).catch(() => { if (active) setFailed(true) })
     return () => { active = false }
   }, [file.id, sheet])
-  return <Modal open title={file.name} closeLabel={t('cancel')} onClose={onClose} contentClassName={css.previewDialog}>
+  return <Modal open title={file.name} closeLabel={t('cancel')} onClose={onClose} className={css.previewDialog}>
     <div className={css.filePreview}>
       {preview?.sheets && preview.sheets.length > 1 && <label>{t('worksheet')} <select value={preview.sheet} onChange={event => setSheet(event.target.value)}>{preview.sheets.map(name => <option key={name} value={name}>{name}</option>)}</select></label>}
       {!preview && !failed && <p className={css.muted} role="status">{t('loading')}</p>}

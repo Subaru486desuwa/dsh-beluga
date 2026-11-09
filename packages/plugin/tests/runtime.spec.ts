@@ -1,16 +1,18 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { Context } from '@deepseek-ai/cordis'
-import LlmRuntime, { LlmAdapter, type GenerateOptions, type StreamChunk, type ToolCallId } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { LlmAdapter, type GenerateOptions, type LlmResolvedModelInfo, type ReasoningEffortId, type StreamChunk, type ToolCallId } from '@deepseek-ai/dsh-llm'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import PersonalChatService from '../lib/index.js'
 import OfficeExtension from '../../office/lib/index.js'
 import { PersonalStore } from '../src/host/storage.ts'
 import type { ConversationRecord } from '../src/host/records.ts'
-import type { ConversationDetail, ConversationId } from '../src/shared/types.ts'
+import type { ConversationDetail, ConversationId, MemorySummaryView } from '../src/shared/types.ts'
+import type { MemorySummaries } from '../src/host/memory-summary.ts'
 import { zipSync } from 'fflate'
 import { currentExport, fixture } from './fixtures/chatgpt.ts'
 import { pdf } from './fixtures/pdf.ts'
@@ -20,16 +22,71 @@ const route = { provider: 'fixture', model: 'echo' }
 /** Long enough for the Office engine to start and open a file. */
 const ENGINE_TIME = 60000
 class ScriptedModel extends LlmAdapter {
-  readonly requests: { sessionId: unknown; system?: string; messages: unknown; tools: readonly string[] }[] = []
+  readonly requests: { sessionId: unknown; system?: string; messages: unknown; tools: readonly string[]; effort?: string }[] = []
   nextTool?: { name: string; arguments: object }
+  /** Picks each next call from the last tool result, or from nothing on the first step; undefined answers. */
+  follow?: (result: string | undefined) => { name: string; arguments: object } | undefined
+  /** Tool calls made one per step, after a tool result too, before the model answers. */
+  readonly script: { name: string; arguments: object }[] = []
+  /** Whether the model keeps calling tools after it is told its tool budget is spent. */
+  ignoresBudget = false
+  /** Whether a request to condense a long chat fails. */
+  failsCondensing = false
+  /** Title requests wait for this before answering. */
+  titleGate?: Promise<void>
+  /** The context window the route discloses, in tokens; undefined discloses none. */
+  contextWindow?: number
   catalogCalls = 0
   providerInfo(provider: string) { return { id: provider, name: 'Local fixture' } }
   async listModels(provider: string) { this.catalogCalls++; return [{ provider, id: 'echo', name: 'Scripted echo', inputModalities: ['text' as const] }] }
+  async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    return { provider, id: model, name: 'Scripted echo', inputModalities: ['text'], reasoning: { efforts: [{ id: brandString<ReasoningEffortId>('off'), name: 'Off' }, { id: brandString<ReasoningEffortId>('high'), name: 'High' }], defaultEffort: brandString<ReasoningEffortId>('high') }, ...(this.contextWindow ? { context: { contextWindow: this.contextWindow } } : {}) }
+  }
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    this.requests.push({ sessionId: options.sessionId, system: options.system, messages: structuredClone(options.messages), tools: options.tools?.map(tool => tool.name) ?? [] })
+    this.requests.push({ sessionId: options.sessionId, system: options.system, messages: structuredClone(options.messages), tools: options.tools?.map(tool => tool.name) ?? [], ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}) })
     const last = options.messages.at(-1)!
     const text = last.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
-    if (last.role === 'tool') {
+    // Condensing names the turns it read, after what was condensed before.
+    if (options.system?.startsWith('You condense')) {
+      if (this.failsCondensing) { yield { type: 'finish', reason: { kind: 'error', failure: { code: 'FIXTURE', message: 'Condensing refused' } } }; return }
+      const turns = [...text.matchAll(/^User: (Turn \S+)/gmu)].map(match => match[1]).join('; ')
+      const previous = /<condensed_so_far>\n([\s\S]*?)\n<\/condensed_so_far>/u.exec(text)?.[1] ?? ''
+      yield { type: 'text-delta', index: 0, text: `<condensed>\nCONDENSED: ${turns}${previous.startsWith('(nothing') ? '' : '\n' + previous}\n</condensed>` }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (options.system?.startsWith('You title chats')) {
+      await this.titleGate
+      yield { type: 'text-delta', index: 0, text: '"Titled: ' + (/<user>\n(.*)/u.exec(text)?.[1] ?? '') + '."' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (options.system?.startsWith('You maintain a memory summary')) {
+      if (options.system.includes('typed a message')) {
+        const message = /<message>\n([\s\S]*)\n<\/message>/u.exec(text)?.[1] ?? ''
+        yield { type: 'text-delta', index: 0, text: message.startsWith('QUESTION') ? '<reply>Answered from the summary.</reply>' + (message.includes('with suggestions') ? '\n<suggestions>\nUnasked\n</suggestions>' : '') : `<reply>Changed.</reply>\n<overview>\nEDITED: ${message}\n</overview>\n<suggestions>\nOne\nTwo\nThree\n</suggestions>` }
+      } else {
+        // An update rewrites the overview and moves the previous overview into "Earlier"; other sections are left out.
+        const told = [...text.matchAll(/^User: (.*)$/gmu)].map(match => match[1]).join('; ')
+        const previous = /<current_summary>\n([\s\S]*?)\n<\/current_summary>/u.exec(text)?.[1] ?? ''
+        const earlier = previous.startsWith('(empty') ? '' : previous.split('\n## ')[0]!
+        yield { type: 'text-delta', index: 0, text: `<overview>\nYou told me: ${told}.\n</overview>\n${earlier ? `<sections>\n## Earlier\n${earlier}\n</sections>\n` : ''}<suggestions>\n- Ask about ${told}\n- Second\n- Third\n</suggestions>` }
+      }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (!this.ignoresBudget && options.system?.includes('used its tool budget')) {
+      yield { type: 'text-delta', index: 0, text: 'Answered from what I found.' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    const followed = this.follow?.(last.role === 'tool' ? text : undefined)
+    if (followed) {
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: brandString<ToolCallId>(randomUUID()), name: followed.name, arguments: JSON.stringify(followed.arguments) } }
+      yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      return
+    }
+    if (last.role === 'tool' && !this.script.length) {
       yield { type: 'text-delta', index: 0, text: 'Tool completed.' }
       yield { type: 'finish', reason: { kind: 'stop' } }
       return
@@ -46,7 +103,15 @@ class ScriptedModel extends LlmAdapter {
       yield { type: 'finish', reason: { kind: 'max-tokens' } }
       return
     }
-    const tool = this.nextTool ?? (text.startsWith('Remember:') ? { name: 'memory_propose', arguments: { text: 'I prefer concise answers', category: 'preference' } } : undefined)
+    if (text.startsWith('THINK')) {
+      yield { type: 'reasoning-delta', index: 0, text: 'Weighing it' }
+      await new Promise(resolve => setTimeout(resolve, 40))
+      yield { type: 'reasoning-delta', index: 0, text: ' up.' }
+      yield { type: 'text-delta', index: 1, text: 'Thought it through.' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    const tool = this.nextTool ?? this.script.shift() ?? (text.startsWith('Remember:') ? { name: 'memory_propose', arguments: { text: 'I prefer concise answers', category: 'preference' } } : undefined)
     this.nextTool = undefined
     if (tool) {
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: brandString<ToolCallId>(randomUUID()), name: tool.name, arguments: JSON.stringify(tool.arguments) } }
@@ -71,7 +136,8 @@ async function setup(path?: string, office = false, config: object = {}) {
   await ctx.plugin(LlmRuntime)
   const adapter = new ScriptedModel()
   ctx.llm.registerAdapter(['fixture'], adapter)
-  await ctx.plugin(PersonalChatService, { ...config, dataDir: directory })
+  // A title is one more background request after a first reply; tests that count requests leave titles off.
+  await ctx.plugin(PersonalChatService, { autoTitles: false, ...config, dataDir: directory })
   if (office) await ctx.plugin(OfficeExtension)
   resources.push({ ctx, path: directory })
   return { ctx, adapter, service: ctx.personalChat, path: directory }
@@ -207,8 +273,10 @@ describe('plugin-owned conversations on the real LLM service', () => {
 
   it('checks attachment ownership and reads an actual PDF without filesystem tools', async () => {
     const app = await setup()
-    const first = await app.service.create({ temporary: false })
     const other = await app.service.create({ temporary: false })
+    await send(app.service, other, 'hello')
+    await settled(app.service, other.conversation.id)
+    const first = await app.service.create({ temporary: false })
     const file = await app.service.upload({ conversationId: first.conversation.id, name: 'paper.pdf', base64: Buffer.from(pdf('PAPER_TEXT_SENTINEL')).toString('base64') })
     await expect(app.service.attachment({ conversationId: other.conversation.id, attachmentId: file.id })).rejects.toThrow('belong')
     app.adapter.nextTool = { name: 'read_attachment', arguments: { attachmentId: file.id } }
@@ -291,6 +359,7 @@ describe('plugin-owned conversations on the real LLM service', () => {
 
   it('enforces tool permissions even when a provider invents an unavailable tool', async () => {
     const app = await setup()
+    await app.service.updateApps({ webAuto: false })
     const normal = await app.service.create({ temporary: false })
     app.adapter.nextTool = { name: 'web_fetch', arguments: { url: 'https://example.invalid/' } }
     await send(app.service, normal, 'Do not access web')
@@ -657,8 +726,28 @@ describe('history catalog', () => {
     await settled(app.service, chat.conversation.id)
     const [item, ...others] = await app.service.list({})
     expect(others).toEqual([])
-    expect(Object.keys(item!).sort()).toEqual(['id', 'pinned', 'title', 'updatedAt'])
+    expect(Object.keys(item!).sort()).toEqual(['activity', 'archived', 'id', 'pinned', 'title', 'updatedAt'])
     expect(item!.title).toBe('A long enough first message')
+  })
+
+  it('marks a chat running, then replied when it finished unwatched, until someone opens it', async () => {
+    const app = await setup()
+    const chat = await app.service.create({ temporary: false })
+    const id = chat.conversation.id
+    await send(app.service, chat, 'WAIT')
+    await vi.waitFor(async () => { expect((await app.service.get({ conversationId: id })).live?.text).toBe('Partial answer') })
+    expect((await app.service.list({}))[0]!.activity).toBe('running')
+    await app.service.stop({ conversationId: id })
+    expect((await app.service.list({}))[0]!.activity).toBe('replied')
+    const watching = new AbortController()
+    const updates = app.service.followConversation({ conversationId: id }, watching.signal)[Symbol.asyncIterator]()
+    await updates.next()
+    expect((await app.service.list({}))[0]!.activity).toBe('idle')
+    await send(app.service, await app.service.get({ conversationId: id }), 'Watched while it answers')
+    await settled(app.service, id)
+    expect((await app.service.list({}))[0]!.activity).toBe('idle')
+    watching.abort()
+    await updates.return?.()
   })
 
   it('finds text on every branch and in imports, but never temporary or removed text', async () => {
@@ -676,9 +765,11 @@ describe('history catalog', () => {
     expect(await hits('no such text')).toEqual([])
 
     await app.service.setArchived({ conversationId: chat.conversation.id, archived: true })
-    expect(await hits('original wording')).toEqual([])
-    expect(await hits('original wording', true)).toEqual([chat.conversation.id])
+    expect(await hits('')).not.toContain(chat.conversation.id)
+    expect(await app.service.list({ query: 'original wording' })).toMatchObject([{ id: chat.conversation.id, archived: true }])
+    expect(await hits('', true)).toEqual([chat.conversation.id])
     await app.service.setArchived({ conversationId: chat.conversation.id, archived: false })
+    expect(await hits('', true)).toEqual([])
 
     const imported = await app.service.commitImport({ previewId: (await app.service.previewImport({ fileName: 'synthetic.json', base64: Buffer.from(JSON.stringify(fixture)).toString('base64') })).id })
     expect(await hits('other_branch')).toEqual(imported.conversations)
@@ -695,26 +786,93 @@ describe('history catalog', () => {
   })
 })
 
-describe('stored turn context', () => {
-  it('drops the oldest turns at a user boundary and remembers how many', async () => {
-    const app = await setup(undefined, false, { maxContextBytes: 4096 })
-    const chat = await app.service.create({ temporary: false })
-    let detail = chat
-    for (let index = 0; index < 6; index++) {
-      await send(app.service, detail, 'Turn ' + index + ' ' + 'x'.repeat(800))
-      detail = await settled(app.service, chat.conversation.id)
+describe('a long chat', () => {
+  const condensing = (adapter: ScriptedModel) => adapter.requests.filter(request => request.system?.startsWith('You condense'))
+  const bytes = (request: ScriptedModel['requests'][number]) => Buffer.byteLength(request.system ?? '') + Buffer.byteLength(JSON.stringify(request.messages))
+  /** The condensed texts stored with a chat, read from disk. */
+  function stored(path: string, id: ConversationId): readonly { readonly text: string }[] {
+    const db = new DatabaseSync(join(path, 'personal-chat.sqlite3'), { readOnly: true })
+    try { return (JSON.parse(String((db.prepare('SELECT value FROM personal_chat_conversations WHERE id = ?').get(id) as { value: string }).value)) as { condensed?: { text: string }[] }).condensed ?? [] }
+    finally { db.close() }
+  }
+  async function chatter(app: Awaited<ReturnType<typeof setup>>, turns: number, size = 1200): Promise<ConversationDetail> {
+    let detail = await app.service.create({ temporary: false })
+    for (let index = 0; index < turns; index++) {
+      await send(app.service, detail, 'Turn ' + index + ' ' + 'x'.repeat(size))
+      detail = await settled(app.service, detail.conversation.id)
     }
-    const sent = app.adapter.requests.at(-1)!.messages as readonly { role: string }[]
-    expect(detail.error).toBeUndefined()
-    expect(detail.omittedMessages).toBeGreaterThan(0)
-    expect(sent[1]!.role).toBe('user')
-    expect(sent.length - 1 + detail.omittedMessages).toBe(detail.messages.length - 1)
+    return detail
+  }
+  /** Each earlier turn reaches the model, as it was or in the condensed text the request carries. */
+  function nothingLost(request: string, turns: number): void {
+    for (let index = 0; index < turns; index++) expect(request).toContain('Turn ' + index)
+  }
+
+  it('leaves a chat that fits as it is', async () => {
+    const app = await setup()
+    await chatter(app, 3)
+    expect(condensing(app.adapter)).toHaveLength(0)
+    const sent = JSON.stringify(chatRequests(app.adapter).at(-1)!.messages)
+    for (let index = 0; index < 2; index++) expect(sent).toContain('Turn ' + index + ' xxx')
+  })
+  it('condenses its oldest turns after a reply, so later requests carry them instead of leaving them out', async () => {
+    const limit = 16 * 1024
+    const app = await setup(undefined, false, { maxContextBytes: limit })
+    const detail = await chatter(app, 6)
+    await vi.waitFor(() => expect(stored(app.path, detail.conversation.id)).not.toHaveLength(0))
+    await send(app.service, detail, 'Turn last')
+    const done = await settled(app.service, detail.conversation.id)
+    expect(done.error).toBeUndefined()
+    expect(done).not.toHaveProperty('omittedMessages')
+    expect(done.messages.filter(message => message.role === 'user')).toHaveLength(7)
+    const sent = JSON.stringify(chatRequests(app.adapter).at(-1)!.messages)
+    expect(sent).toContain('CONDENSED: Turn 0')
+    expect(sent).not.toContain('Turn 0 xxx')
+    nothingLost(sent, 6)
+    for (const request of chatRequests(app.adapter)) expect(bytes(request)).toBeLessThanOrEqual(limit)
     await app.ctx.fiber.dispose()
     resources.splice(resources.findIndex(item => item.ctx === app.ctx), 1)
-    const again = await setup(app.path, false, { maxContextBytes: 4096 })
-    expect((await again.service.get({ conversationId: chat.conversation.id })).omittedMessages).toBe(detail.omittedMessages)
+    const again = await setup(app.path, false, { maxContextBytes: limit })
+    await send(again.service, done, 'Turn after restart')
+    await settled(again.service, detail.conversation.id)
+    expect(JSON.stringify(chatRequests(again.adapter)[0]!.messages)).toContain('CONDENSED: Turn 0')
   })
+  it('waits for condensing when a request would otherwise leave turns out', async () => {
+    const app = await setup(undefined, false, { maxContextBytes: 16 * 1024 })
+    // Under half the budget without tool results, so nothing condenses after these replies; the next message overruns it.
+    const detail = await chatter(app, 3, 1150)
+    expect(condensing(app.adapter)).toHaveLength(0)
+    await send(app.service, detail, 'Turn big ' + 'y'.repeat(8150))
+    const done = await settled(app.service, detail.conversation.id)
+    expect(done.error).toBeUndefined()
+    expect(app.adapter.requests.at(-2)!.system).toMatch(/^You condense/u)
+    const sent = JSON.stringify(chatRequests(app.adapter).at(-1)!.messages)
+    expect(sent).toContain('Turn big')
+    nothingLost(sent, 3)
+  })
+  it('goes on without condensed text when condensing fails, and the reply still completes', async () => {
+    const app = await setup(undefined, false, { maxContextBytes: 16 * 1024 })
+    app.adapter.failsCondensing = true
+    // Under half the budget without tool results, so nothing condenses after these replies; the next message overruns it.
+    const detail = await chatter(app, 3, 1150)
+    await send(app.service, detail, 'Turn big ' + 'y'.repeat(8150))
+    const done = await settled(app.service, detail.conversation.id)
+    expect(done.error).toBeUndefined()
+    expect(condensing(app.adapter)).toHaveLength(1)
+    const sent = JSON.stringify(chatRequests(app.adapter).at(-1)!.messages)
+    expect(sent).toContain('Turn big')
+    expect(sent).not.toContain('Turn 0 ')
+  })
+  it('holds the budget to what the route\'s context window leaves after the reply', async () => {
+    const app = await setup()
+    app.adapter.contextWindow = 8192 + 4096
+    await chatter(app, 5, 1000)
+    for (const request of chatRequests(app.adapter)) expect(bytes(request)).toBeLessThanOrEqual(8192)
+    expect(condensing(app.adapter).length).toBeGreaterThan(0)
+  })
+})
 
+describe('stored turn context', () => {
   it('keeps no copy of the context it sent once a memory is forgotten', async () => {
     const app = await setup()
     const proposal = await app.service.proposeMemory({ text: 'The favourite colour is FORGETSENTINEL', category: 'fact', source: { kind: 'manual' } })
@@ -763,6 +921,15 @@ describe('turn end commit', () => {
     expect(save).toHaveBeenCalledTimes(2)
     expect(save.mock.calls[0]![0].running).toBe(true)
     expect(save.mock.calls[1]![0].running).toBe(false)
+  })
+
+  it('tells how long the running step has taken, by the Host clock', async () => {
+    const app = await setup()
+    const id = await streaming(app, await app.service.create({ temporary: false }))
+    const first = (await app.service.get({ conversationId: id })).live!.stepElapsedMs
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect((await app.service.get({ conversationId: id })).live!.stepElapsedMs).toBeGreaterThanOrEqual(first + 20)
+    await app.service.stop({ conversationId: id })
   })
 
   it('stores a stopped reply and its end state in one commit', async () => {
@@ -932,7 +1099,7 @@ describe('reference chat history', () => {
     expect(result).toContain(source.conversation.id)
   })
 
-  it('leaves out the current chat, archived chats and deleted chats', async () => {
+  it('leaves out the current chat and deleted chats, and finds archived ones', async () => {
     const app = await setup()
     const archived = await history(app)
     await app.service.setArchived({ conversationId: archived.conversation.id, archived: true })
@@ -942,8 +1109,10 @@ describe('reference chat history', () => {
     app.adapter.nextTool = { name: 'search_chats', arguments: { query: 'belugasentinel' } }
     await send(app.service, await app.service.get({ conversationId: current.conversation.id }), 'Search')
     await settled(app.service, current.conversation.id)
-    expect(toolText(app)).toContain('excerpts')
-    expect(toolText(app)).not.toContain('spring')
+    const result = toolText(app)
+    expect(result).toContain(archived.conversation.id)
+    expect(result).not.toContain(deleted.conversation.id)
+    expect(result).not.toContain(current.conversation.id)
   })
 
   it('is unavailable when turned off, and in Temporary Chat', async () => {
@@ -964,5 +1133,396 @@ describe('reference chat history', () => {
     await settled(app.service, temporary.conversation.id)
     expect(app.adapter.requests.at(-2)!.tools).not.toContain('search_chats')
     expect(toolText(app)).not.toContain('spring')
+  })
+})
+
+describe('turn controls', () => {
+  it('offers reasoning efforts, sends the chosen one and starts the next chat from it', async () => {
+    const app = await setup()
+    const offered = (await app.service.models()).find(choice => choice.model === 'echo')!
+    expect(offered).toMatchObject({ efforts: [{ id: 'off', name: 'Off' }, { id: 'high', name: 'High' }], defaultEffort: 'high' })
+    expect(offered.lastUsed).toBeUndefined()
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'hello', { model: { ...route, effort: 'off' } })
+    await settled(app.service, chat.conversation.id)
+    expect(app.adapter.requests.at(-1)?.effort).toBe('off')
+    expect((await app.service.get({ conversationId: chat.conversation.id })).model).toEqual({ ...route, effort: 'off' })
+    expect((await app.service.models()).find(choice => choice.model === 'echo')).toMatchObject({ lastUsed: true, effort: 'off' })
+    await expect(send(app.service, chat, 'again', { model: { ...route, effort: 'max' } })).rejects.toThrow('reasoning effort')
+  })
+
+  it('remembers nothing from Temporary Chat', async () => {
+    const app = await setup()
+    const chat = await app.service.create({ temporary: true })
+    await send(app.service, chat, 'hello', { model: { ...route, effort: 'off' } })
+    await settled(app.service, chat.conversation.id)
+    expect((await app.service.models()).find(choice => choice.model === 'echo')).not.toHaveProperty('lastUsed')
+  })
+
+  it('keeps the to-do list out of the tool budget and shows the latest valid list', async () => {
+    const app = await setup(undefined, false, { maxToolSteps: 2 })
+    const plan = (first: string, second: string) => ({ name: 'todo_write', arguments: { todos: [{ content: 'Recall', status: first }, { content: 'Answer', status: second }] } })
+    app.adapter.script.push(plan('in_progress', 'pending'), { name: 'memory_recall', arguments: { query: '' } }, { name: 'todo_write', arguments: { todos: [{ content: 'Recall', status: 'in_progress' }, { content: 'Answer', status: 'in_progress' }] } }, plan('completed', 'in_progress'))
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'plan this')
+    const done = await settled(app.service, chat.conversation.id)
+    expect(done.error).toBeUndefined()
+    expect(done.messages.at(-1)?.text).toBe('Tool completed.')
+    const lists = done.messages.filter(message => message.todos).map(message => message.todos!.map(todo => todo.status))
+    expect(lists).toEqual([['in_progress', 'pending'], ['completed', 'in_progress']])
+    expect(done.messages.filter(message => message.role === 'tool').map(message => message.text)).toEqual(expect.arrayContaining([expect.stringContaining('"message":"Keep at most one todo in_progress"')]))
+  })
+
+  it('records how long the model reasoned before answering', async () => {
+    const app = await setup()
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'THINK about it')
+    const reply = (await settled(app.service, chat.conversation.id)).messages.at(-1)!
+    expect(reply).toMatchObject({ role: 'assistant', text: 'Thought it through.', reasoning: 'Weighing it up.' })
+    expect(reply.thinkingMs).toBeGreaterThanOrEqual(30)
+    expect((await send(app.service, chat, 'hello').then(() => settled(app.service, chat.conversation.id))).messages.at(-1)).not.toHaveProperty('thinkingMs')
+  })
+
+  it('lists a chat once it holds a message and discards drafts left behind', async () => {
+    const app = await setup()
+    const left = await app.service.create({ temporary: false })
+    const file = await app.service.upload({ conversationId: left.conversation.id, name: 'note.txt', base64: Buffer.from('DRAFT_FILE').toString('base64') })
+    expect(await app.service.list({})).toEqual([])
+    const next = await app.service.create({ temporary: false })
+    await expect(app.service.get({ conversationId: left.conversation.id })).rejects.toThrow()
+    expect(await diskText(app.path)).not.toContain('DRAFT_FILE')
+    expect(file.id).toBeTruthy()
+    await send(app.service, next, 'hello')
+    await settled(app.service, next.conversation.id)
+    expect((await app.service.list({})).map(item => item.id)).toEqual([next.conversation.id])
+  })
+
+  it('keeps a draft a page still shows', async () => {
+    const app = await setup()
+    const shown = await app.service.create({ temporary: false })
+    const control = new AbortController()
+    const watching = (async () => { for await (const _ of app.service.followConversation({ conversationId: shown.conversation.id }, control.signal)) { /* held open */ } })().catch(() => undefined)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await app.service.create({ temporary: false })
+    expect((await app.service.get({ conversationId: shown.conversation.id })).conversation.id).toBe(shown.conversation.id)
+    control.abort()
+    await watching
+  })
+})
+
+describe('memory summary', () => {
+  /** Wait until no summary update is queued or running. */
+  async function idle(service: PersonalChatService): Promise<MemorySummaryView> {
+    for (let attempt = 0; attempt < 250; attempt++) {
+      const { summary } = await service.memoryState({})
+      if (!summary.updating) return summary
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    throw new Error('The summary update did not finish')
+  }
+  async function said(app: Awaited<ReturnType<typeof setup>>, detail: ConversationDetail, text: string): Promise<ConversationDetail> {
+    await send(app.service, detail, text)
+    return settled(app.service, detail.conversation.id)
+  }
+  const lastRequest = (app: Awaited<ReturnType<typeof setup>>) => JSON.stringify(app.adapter.requests.at(-1))
+
+  it('is written from normal chats only and given to later normal chats', async () => {
+    const app = await setup()
+    let chat = await said(app, await app.service.create({ temporary: false }), 'I am building SUMMARY_FACT')
+    const temporary = await said(app, await app.service.create({ temporary: true }), 'TEMP_ONLY')
+    expect((await app.service.memoryState({})).summary).toMatchObject({ revision: 0, text: '', suggestions: [], updatedAt: 0, updating: false, sensitive: false, canUndo: false })
+    expect((await app.service.refreshSummary({})).updating).toBe(true)
+    const summary = await idle(app.service)
+    expect(summary.text).toBe('You told me: I am building SUMMARY_FACT.')
+    expect(summary.suggestions).toEqual(['Ask about I am building SUMMARY_FACT', 'Second', 'Third'])
+    expect(summary.updatedAt).toBeGreaterThan(0)
+    expect(summary.error).toBeUndefined()
+    const request = app.adapter.requests.at(-1)!
+    expect(request.system).toContain('You maintain a memory summary')
+    expect(request.sessionId).toBeUndefined()
+    expect(request.effort).toBe('high')
+    expect(request.tools).toEqual([])
+    const requests = app.adapter.requests.length
+    await app.service.refreshSummary({})
+    await idle(app.service)
+    expect(app.adapter.requests).toHaveLength(requests)
+    chat = await said(app, chat, 'next question')
+    expect(lastRequest(app)).toContain('Memory summary, written from earlier chats')
+    expect(lastRequest(app)).toContain('SUMMARY_FACT')
+    await said(app, temporary, 'temporary question')
+    expect(lastRequest(app)).not.toContain('SUMMARY_FACT')
+    await expect(app.service.refreshSummary({ conversationId: temporary.conversation.id })).rejects.toThrow('Temporary Chat')
+    await app.service.refreshSummary({})
+    expect((await idle(app.service)).text).toBe('You told me: next question.\n\n## Earlier\nYou told me: I am building SUMMARY_FACT.')
+  })
+
+  it('saves typed text as written, keeps sections an update leaves out, and still removes credentials', async () => {
+    const app = await setup()
+    const chat = await said(app, await app.service.create({ temporary: false }), 'first fact')
+    await app.service.refreshSummary({})
+    const first = await idle(app.service)
+    const typed = 'Pasted from elsewhere.\n\n## Notes\nMy own   wording, kept *exactly*.'
+    const requests = app.adapter.requests.length
+    const edited = await app.service.editSummary({ expectedRevision: first.revision, text: typed + '\n' })
+    expect(edited).toMatchObject({ text: typed, revision: first.revision + 1, suggestions: first.suggestions, canUndo: true })
+    expect(app.adapter.requests).toHaveLength(requests)
+    await expect(app.service.editSummary({ expectedRevision: first.revision, text: 'stale' })).rejects.toThrow('The summary changed')
+    const temporary = await said(app, await app.service.create({ temporary: true }), 'TEMP_ONLY')
+    await expect(app.service.editSummary({ conversationId: temporary.conversation.id, expectedRevision: edited.revision, text: 'x' })).rejects.toThrow('Temporary Chat')
+    await said(app, chat, 'second fact')
+    await app.service.refreshSummary({})
+    const updated = await idle(app.service)
+    expect(updated.text).toBe('You told me: second fact.\n\n## Notes\nMy own   wording, kept *exactly*.\n\n## Earlier\nPasted from elsewhere.')
+    const scrubbed = await app.service.editSummary({ expectedRevision: updated.revision, text: 'API key: sk-live-1\nCall 13800138000.' })
+    expect(scrubbed.text).toBe('Call •••.')
+    await expect(app.service.editSummary({ expectedRevision: scrubbed.revision, text: 'x'.repeat(16_001) })).rejects.toThrow('maxSummaryBytes')
+    expect((await app.service.undoSummary({ expectedRevision: scrubbed.revision })).text).toBe(updated.text)
+  })
+
+  it('answers, corrects, undoes and clears on request, and survives a restart', async () => {
+    const app = await setup()
+    await said(app, await app.service.create({ temporary: false }), 'I like tea')
+    await app.service.refreshSummary({})
+    const summary = await idle(app.service)
+    const asked = await app.service.askSummary({ text: 'QUESTION what do I like?' })
+    expect(asked.reply).toBe('Answered from the summary.')
+    expect(asked.summary.revision).toBe(summary.revision)
+    const suggested = await app.service.askSummary({ text: 'QUESTION with suggestions' })
+    expect(suggested.reply).toBe('Answered from the summary.')
+    expect(suggested.summary).toMatchObject({ revision: summary.revision, suggestions: summary.suggestions })
+    const changed = await app.service.askSummary({ text: 'Forget the tea' })
+    expect(app.adapter.requests.at(-1)?.system).toContain('typed a message')
+    expect(changed).toMatchObject({ reply: 'Changed.', summary: { text: 'EDITED: Forget the tea', suggestions: ['One', 'Two', 'Three'], canUndo: true } })
+    const undone = await app.service.undoSummary({ expectedRevision: changed.summary.revision })
+    expect(undone).toMatchObject({ text: summary.text, canUndo: false })
+    await expect(app.service.undoSummary({ expectedRevision: changed.summary.revision })).rejects.toThrow('The summary changed')
+    const cleared = await app.service.clearSummary({ expectedRevision: undone.revision })
+    expect(cleared).toMatchObject({ text: '', suggestions: [], canUndo: true })
+    const restored = await app.service.undoSummary({ expectedRevision: cleared.revision })
+    expect(restored.text).toBe(summary.text)
+    await app.ctx.fiber.dispose()
+    resources.splice(resources.findIndex(item => item.ctx === app.ctx), 1)
+    const again = await setup(app.path)
+    expect((await again.service.memoryState({})).summary).toMatchObject({ text: summary.text, revision: restored.revision })
+    await again.service.refreshSummary({})
+    await idle(again.service)
+    expect(again.adapter.requests).toHaveLength(0)
+  })
+
+  it('follows its options, and stays out of chats while referring to earlier chats is off', async () => {
+    const app = await setup()
+    const chat = await said(app, await app.service.create({ temporary: false }), 'I keep a diary')
+    expect(await app.service.summaryOptions({ model: route, sensitive: true })).toMatchObject({ model: route, sensitive: true })
+    await expect(app.service.summaryOptions({ model: { provider: 'fixture', model: 'missing' }, sensitive: false })).rejects.toThrow('not available')
+    await app.service.refreshSummary({})
+    expect((await idle(app.service)).text).toContain('diary')
+    expect(app.adapter.requests.at(-1)?.system).toContain('may be kept')
+    expect((await app.service.summaryOptions({ sensitive: false }))).not.toHaveProperty('model')
+    const { profile } = await app.service.memoryState({})
+    await app.service.updateProfile({ expectedRevision: profile.revision, background: '', instructions: '', autoSaveLowRisk: true, referenceChats: false })
+    await expect(app.service.refreshSummary({})).rejects.toThrow('Turn on referencing')
+    await expect(app.service.askSummary({ text: 'QUESTION' })).rejects.toThrow('Turn on referencing')
+    await said(app, chat, 'another thing')
+    expect(lastRequest(app)).not.toContain('Memory summary, written')
+  })
+
+  it('updates on its own once chats are quiet, at most every six hours', async () => {
+    const app = await setup()
+    const chat = await said(app, await app.service.create({ temporary: false }), 'first fact')
+    const summaries = Reflect.get(app.service, 'summaries') as MemorySummaries
+    const minutes = (count: number) => Date.now() + count * 60 * 1000
+    summaries.tick(minutes(10))
+    expect((await app.service.memoryState({})).summary.updating).toBe(false)
+    summaries.tick(minutes(31))
+    expect((await idle(app.service)).text).toBe('You told me: first fact.')
+    await said(app, chat, 'second fact')
+    const requests = app.adapter.requests.length
+    summaries.tick(minutes(31))
+    expect((await idle(app.service)).text).not.toContain('second fact')
+    expect(app.adapter.requests).toHaveLength(requests)
+    summaries.tick(minutes(7 * 60))
+    expect((await idle(app.service)).text).toContain('second fact')
+  })
+
+  it('waits for a model instead of failing when no chat has picked one', async () => {
+    const app = await setup()
+    await said(app, await app.service.create({ temporary: false }), 'old fact')
+    // Chats sent before the last route was remembered leave nothing to follow.
+    const { chats } = app.service as unknown as { chats: { domain: { preferences: { set(value: { efforts: Record<string, never> }): Promise<void> } } } }
+    await chats.domain.preferences.set({ efforts: {} })
+    const summaries = Reflect.get(app.service, 'summaries') as MemorySummaries
+    const later = () => Date.now() + 31 * 60 * 1000
+    const requests = app.adapter.requests.length
+    summaries.tick(later())
+    expect((await idle(app.service)).error).toBeUndefined()
+    expect(app.adapter.requests).toHaveLength(requests)
+    await app.service.summaryOptions({ model: route, sensitive: false })
+    summaries.tick(later())
+    expect((await idle(app.service)).text).toBe('You told me: old fact.')
+  })
+})
+
+/** Model requests for replies, without the Memory Summary's own. */
+const chatRequests = (adapter: ScriptedModel) => adapter.requests.filter(request => !request.system?.startsWith('You maintain') && !request.system?.startsWith('You condense'))
+
+describe('web search on demand', () => {
+  const web = { search: async () => ({ sources: [], truncated: false }), fetch: async (request: { url: string }) => ({ url: request.url, statusCode: 200, body: { kind: 'text', text: 'Page' }, truncated: false }) }
+  it('is there for the model unasked, and only for picked messages once automatic use is off', async () => {
+    const app = await setup()
+    app.ctx.provide('web', web)
+    let chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Hello')
+    chat = await settled(app.service, chat.conversation.id)
+    expect(chatRequests(app.adapter).at(-1)!.tools).toEqual(expect.arrayContaining(['web_search', 'web_fetch']))
+    expect((await app.service.updateApps({ webAuto: false })).web).toEqual({ available: true, auto: false })
+    await send(app.service, chat, 'Again')
+    chat = await settled(app.service, chat.conversation.id)
+    expect(chatRequests(app.adapter).at(-1)!.tools).not.toContain('web_search')
+    await send(app.service, chat, 'Search this', { web: true })
+    chat = await settled(app.service, chat.conversation.id)
+    const last = chatRequests(app.adapter).at(-1)!
+    expect(last.tools).toContain('web_search')
+    expect(JSON.stringify(last.messages)).toContain('[The user turned on web search for this message')
+    expect(chat.messages.filter(message => message.role === 'user').at(-1)!.text).toBe('Search this')
+  })
+})
+
+describe('a long tool chain', () => {
+  const research = (adapter: ScriptedModel) => { adapter.follow = () => ({ name: 'memory_recall', arguments: { query: 'step ' + adapter.requests.length } }) }
+  it('answers from what it gathered once the tool budget is spent', async () => {
+    const app = await setup(undefined, false, { maxToolSteps: 3 })
+    research(app.adapter)
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Research this thoroughly')
+    const done = await settled(app.service, chat.conversation.id)
+    expect(done.error).toBeUndefined()
+    expect(done.messages.filter(message => message.role === 'tool')).toHaveLength(3)
+    expect(done.messages.at(-1)).toMatchObject({ role: 'assistant', text: 'Answered from what I found.' })
+    const last = chatRequests(app.adapter).at(-1)!
+    expect(last.system).toContain('used its tool budget')
+    expect(last.tools).toContain('memory_recall')
+  })
+  it('runs nothing the model calls after its budget is spent, and keeps the history valid', async () => {
+    const app = await setup(undefined, false, { maxToolSteps: 3 })
+    research(app.adapter)
+    app.adapter.ignoresBudget = true
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Research this thoroughly')
+    const done = await settled(app.service, chat.conversation.id)
+    expect(done.error).toBe('tool-limit')
+    expect(done.messages.filter(message => message.role === 'tool')).toHaveLength(3)
+    expect(done.messages.at(-1)!.role).toBe('tool')
+    expect(chatRequests(app.adapter)).toHaveLength(4)
+  })
+  it('clears the oldest results of a long reply to fit the context, instead of failing', async () => {
+    const limit = 24 * 1024
+    const app = await setup(undefined, false, { maxContextBytes: limit, maxAttachmentTextBytes: 6000 })
+    app.ctx.provide('web', { search: async () => ({ sources: [], truncated: false }), fetch: async (request: { url: string }) => ({ url: request.url, statusCode: 200, body: { kind: 'text', text: 'PAGE ' + request.url + ' ' + 'x'.repeat(5000) }, truncated: false }) })
+    for (let page = 1; page <= 6; page++) app.adapter.script.push({ name: 'web_fetch', arguments: { url: 'https://example.com/' + page } })
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Read these pages')
+    const done = await settled(app.service, chat.conversation.id)
+    expect(done.error).toBeUndefined()
+    expect(done.messages.at(-1)).toMatchObject({ role: 'assistant', text: 'Tool completed.' })
+    const requests = chatRequests(app.adapter)
+    for (const request of requests) expect(Buffer.byteLength(request.system ?? '') + Buffer.byteLength(JSON.stringify(request.messages))).toBeLessThanOrEqual(limit)
+    const sent = JSON.stringify(requests.at(-1)!.messages)
+    expect(sent).toContain('PAGE https://example.com/6')
+    expect(sent).not.toContain('PAGE https://example.com/1')
+    expect(sent).toContain('cleared to fit')
+    expect(done.messages.filter(message => message.role === 'tool').map(message => message.text).join()).toContain('PAGE https://example.com/1')
+  })
+})
+
+describe('notes under a reply', () => {
+  it('notes the memory a reply proposed, and the list marks the chat waiting until the person decides', async () => {
+    const app = await setup()
+    const chat = await app.service.create({ temporary: false })
+    const controller = new AbortController()
+    onTestFinished(() => { controller.abort() })
+    const changes: string[] = []
+    void (async () => { for await (const change of app.service.follow(controller.signal)) changes.push(change.kind) })().catch(() => { /* Following ends when the test aborts it. */ })
+    app.adapter.nextTool = { name: 'memory_propose', arguments: { text: 'I live in Paris', category: 'fact' } }
+    await send(app.service, chat, 'Hello there')
+    const done = await settled(app.service, chat.conversation.id)
+    const candidate = (await app.service.memoryState({})).candidates.find(item => item.state === 'pending')!
+    expect(done.messages.find(message => message.role === 'tool')!.proposed).toEqual([candidate.id])
+    const row = async () => (await app.service.list({})).find(item => item.id === chat.conversation.id)!
+    expect((await row()).activity).toBe('waiting')
+    const before = changes.filter(kind => kind === 'catalog').length
+    await app.service.decideCandidate({ candidateId: candidate.id, expectedRevision: candidate.revision, decision: 'reject' })
+    expect((await row()).activity).not.toBe('waiting')
+    await vi.waitFor(() => expect(changes.filter(kind => kind === 'catalog').length).toBeGreaterThan(before))
+  })
+
+  it('notes Saved Memories given as context or looked up, and the chats a search found by their current titles', async () => {
+    const app = await setup()
+    const first = await app.service.create({ temporary: false })
+    await send(app.service, first, 'Remember: I prefer concise answers')
+    await settled(app.service, first.conversation.id)
+    const saved = (await app.service.memoryState({})).memories[0]!
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Keep answers concise')
+    let done = await settled(app.service, chat.conversation.id)
+    expect(done.messages.at(-1)!.recalled).toEqual([saved.id])
+    const lastTool = () => done.messages.filter(message => message.role === 'tool').at(-1)!
+    app.adapter.nextTool = { name: 'memory_recall', arguments: { query: 'concise' } }
+    await send(app.service, done, 'What do you know about me?')
+    done = await settled(app.service, chat.conversation.id)
+    expect(lastTool().recalled).toEqual([saved.id])
+    await app.service.rename({ conversationId: first.conversation.id, title: 'Style notes' })
+    app.adapter.nextTool = { name: 'search_chats', arguments: { query: 'concise answers' } }
+    await send(app.service, done, 'Search')
+    done = await settled(app.service, chat.conversation.id)
+    expect(lastTool().referenced).toEqual([{ conversationId: first.conversation.id, title: 'Style notes' }])
+    await app.service.deleteConversation({ conversationId: first.conversation.id })
+    done = await app.service.get({ conversationId: chat.conversation.id })
+    expect(lastTool().referenced).toEqual([])
+  })
+})
+
+describe('automatic titles', () => {
+  const titleRequests = (app: Awaited<ReturnType<typeof setup>>) => app.adapter.requests.filter(request => request.system?.startsWith('You title chats'))
+  const conversation = async (app: Awaited<ReturnType<typeof setup>>, id: ConversationId) => (await app.service.get({ conversationId: id })).conversation
+
+  it('titles a new chat once, from its first exchange, at the route’s least effort', async () => {
+    const app = await setup(undefined, false, { autoTitles: true })
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Plan a weekend in Kyoto')
+    const done = await settled(app.service, chat.conversation.id)
+    await vi.waitFor(async () => expect(await conversation(app, chat.conversation.id)).toMatchObject({ title: 'Titled: Plan a weekend in Kyoto', titleSource: 'generated' }))
+    expect(titleRequests(app)[0]!.effort).toBe('high')
+    await send(app.service, await app.service.get({ conversationId: done.conversation.id }), 'And Osaka?')
+    await settled(app.service, chat.conversation.id)
+    expect(titleRequests(app)).toHaveLength(1)
+  })
+
+  it('keeps a rename made while the title is being written', async () => {
+    const app = await setup(undefined, false, { autoTitles: true })
+    let release!: () => void
+    app.adapter.titleGate = new Promise(resolve => { release = resolve })
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'Plan a weekend in Kyoto')
+    await settled(app.service, chat.conversation.id)
+    await vi.waitFor(() => expect(titleRequests(app)).toHaveLength(1))
+    await app.service.rename({ conversationId: chat.conversation.id, title: 'Kyoto' })
+    release()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(await conversation(app, chat.conversation.id)).toMatchObject({ title: 'Kyoto', titleSource: 'renamed' })
+  })
+
+  it('leaves alone a chat whose first reply did not finish, and Temporary Chat', async () => {
+    const app = await setup(undefined, false, { autoTitles: true })
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'WAIT for it')
+    await app.service.stop({ conversationId: chat.conversation.id })
+    await send(app.service, await app.service.get({ conversationId: chat.conversation.id }), 'Plan a weekend in Kyoto')
+    await settled(app.service, chat.conversation.id)
+    const temporary = await app.service.create({ temporary: true })
+    await send(app.service, temporary, 'Plan a weekend in Kyoto')
+    await settled(app.service, temporary.conversation.id)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(titleRequests(app)).toEqual([])
+    expect((await conversation(app, chat.conversation.id)).title).toBe('WAIT for it')
   })
 })

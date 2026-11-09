@@ -2,7 +2,7 @@
 
 ## Agreed outcome
 
-Ship a base community DeepSeek Harness plugin for Chat and Memory, installed into the existing Web/Desktop shell. Office processing is a separate opt-in extension installed only after explicit user consent. It adds Chat beside unchanged Work. It must not require a modified Harness, an upstream patch, a private fork, a native Work Session, or an embedded third-party website.
+Ship a base community DeepSeek Harness plugin for Chat and Memory, installed into the existing Web/Desktop shell. Office processing is a separate opt-in extension installed only after explicit user consent. It adds Chat beside Work as a peer top-level mode. It must not require a patched or forked Harness, a native Work Session, or an embedded third-party website; its Chat sidebar shadows the stock workspace browser only while Chat is open (ADR 0005).
 
 Deliver independently installable base and Office tarballs with their source; the base must not depend on or auto-install Office. Installation and compatibility claims require packed-artifact acceptance. Real official ChatGPT export validation follows when that separately requested input becomes available.
 
@@ -17,6 +17,9 @@ The base plugin contains Chat and Memory. Office capabilities are a separately d
 - Pin a Chat to the top of its list without counting as activity. Export a saved Chat as Markdown in the browser; tool output and reasoning stay out.
 - List the web pages a reply consulted beneath it as links. Read a reply aloud with voices on the user's device only; never fall back to a network voice.
 - Support owned text documents and extractable-text PDFs, images on explicitly supported model routes, and optional existing web search/fetch. Unsupported image/model or scanned PDF paths must fail clearly before pretending content was read. No arbitrary filesystem, shell, deployment, subagent or plugin-install tools.
+- A reply may take up to `maxToolSteps` model steps with tool calls (16 by default). After the last one the model gets one more request and answers from what it gathered, instead of the reply ending without an answer; a tool call it makes anyway runs nothing and is not kept. When a long reply outgrows the context budget, its oldest tool results are cleared from the request, never the latest step's, and the stored history keeps them.
+- A chat longer than its request budget condenses instead of losing turns (ADR 0004). A request first clears the tool results of earlier turns, then the current reply's older ones. When earlier turns would still have to leave, the model rewrites the oldest turns into Condensed History, normally in the background after a reply, and requests carry it in their place. Reasoning stays in every turn a request carries. Nothing about this is shown to the person, and the stored history is unchanged. `maxContextBytes` defaults to 512 KiB and is held to what a route's disclosed context window leaves after the reply.
+- Web search and fetch are offered to the model whenever a Harness web provider exists. Once the person turns automatic use off, only a message that picks them gets them.
 - A compact stable profile and custom instructions do not depend on keyword recall. Relevant memories keep source/scope/revision. Explicit remember and clear low-risk facts can save with feedback/undo; sensitive, inferred or conflicting candidates require confirmation. Corrections supersede old facts and forget suppresses automatic relearning.
 - While replying, the model may search the user's earlier active plugin chats for bounded excerpts, behind a default-on profile switch. Temporary Chat never has this tool or reads the store for it. Imported originals stay out, and tool output is not indexed.
 - Temporary Chat is immutable per new conversation: no local persistent history, drafts, attachments, snapshots or long-term memory read/write. Keep bytes and live state in memory; close disposes the lifecycle. No native Session is created just to obtain LLM access. Validate official no-sessionId text provider paths; image paths must use a verified in-memory resolver/adapter, not stock attachment storage or forced-error fallback.
@@ -28,6 +31,29 @@ The base plugin contains Chat and Memory. Office capabilities are a separately d
 - Single self-hosted owner first. No multi-tenant billing, voice/realtime screen, image generation or scheduled tasks in this release.
 - Source files, existing Work data and daily DSH are untouched. No personal export bodies or credentials in Git, fixtures, diagnostics or screenshots used for public contribution.
 - Stored data carries a version. Additive upgrades run in one transaction on open; a version with no upgrade path is refused and left untouched.
+
+## Next-phase behavior
+
+Agreed on 2026-11-08; terms follow GLOSSARY.md. The compatibility target follows the Harness release line in daily use instead of 0.2.1-rc.3. Where a first-release bullet above differs, this section replaces it. Stages land in this order; Canvas, a file library, deep research, data analysis, image generation and scheduled tasks come later, and follow-up suggestions under replies are not planned.
+
+1. **Memory Summary fixes.**
+   - It records only what the person said or confirmed. Drafts, translations or role-play the person asked for, pasted material and hypotheticals are not the person's views. Assistant text only helps interpret short replies, and every new fact rests on a user message.
+   - An automatic update returns only the sections it changes, each in full, plus the sections it removes; every other section keeps its exact text. A change the person made is revised only when the person later says otherwise.
+   - The person can edit the summary text directly. It is saved as typed without a model, except that credential lines, long numbers and email addresses are removed as from any summary text, and it then takes part in later updates like any other text. Ask-or-update stays for questions and model-applied changes, which also return only the parts they change.
+2. **Information architecture.**
+   - Chat and Work are peer top-level modes, switched from the panel list, which gains a built-in Work row. In Chat mode one sidebar shows New chat as its primary action, then search, Projects and the chat list, with Settings at the bottom; Work mode stays stock. Beluga shadows the workspace browser while Chat is open (ADR 0005); the stock New Session button stays at the top and starts a Work session.
+   - Pinned chats stay on top. Unpinned chats sort by last activity, grouped Today, Yesterday, Previous 7 days, Previous 30 days and by month, without a per-row date; or by Chat Activity State: running, waiting for the person, new reply, then the rest by time. The choice is remembered.
+   - Each row shows its Chat Activity State: a shimmering title and spinner while running, a needs-confirmation mark while waiting, a dot for a reply that finished while the person was elsewhere until the chat is opened, and nothing when idle.
+   - While the model thinks, the reply shows the elapsed seconds, advancing every second; afterwards it shows the duration the Host stored. Reasoning text streams smoothly. Durations that advance only in 3-second steps are a defect.
+   - One Settings button opens a Beluga dialog: General; Personalization with Custom Instructions, memory switches, the Memory Summary and saved memories; Apps with web search and Work Records; Data controls with ChatGPT import and archived chats. The archived filter leaves the sidebar.
+   - An automatically saved memory shows Undo, and a candidate shows Save and Dismiss, under the reply that proposed it; that chat then waits for the person in the list.
+   - Sources under a reply list the Saved Memories recalled and the chats referenced beside web pages. The Memory Summary and Custom Instructions are not listed.
+   - Archiving only hides a chat: it stays searchable, including by `search_chats`, and still feeds the Memory Summary. Deleting is how the person makes Beluga forget a chat.
+   - Temporary Chat still neither reads nor writes personal memory.
+3. **Work crossings.** Memory Lookup reaches top-level Work sessions only and is off by default. Work Records reads only the workspaces the person allows, is off by default, and matches a time range and words against what the person and the agent said in the newest sessions, without full-text search; replies list the Work sessions they read. Nothing learns from Work: a reply that read Work proposes no memory, and the Memory Summary skips what the assistant said after the read. Hand-off to Work asks for a workspace, most recently changed first, and appends the brief to any existing draft without sending it.
+4. **Projects.** A Project groups chats with its own files, instructions and a Memory Scope, Default or Project-only, changeable after creation. Under Project-only, outside Saved Memories and the Memory Summary stay out, `search_chats` reaches only the project, outside chats cannot reach it, and its chats never feed the Memory Summary; Custom Instructions still apply. A Project never binds a workspace directory.
+5. **Personalization.** Custom Instructions gain a base style (Default, Professional, Friendly, Candid, Efficient) and four characteristics (warm, enthusiastic, headers and lists, emoji), each Default, More or Less. Temporary Chat does not use them.
+6. **Automatic titles.** After the first reply, the chat's own route writes one short title in the person's language. A rename is final, titles are not rewritten later, and existing chats and imported history keep theirs.
 
 ## Implementation approach
 

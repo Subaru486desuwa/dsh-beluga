@@ -26,7 +26,7 @@ Open **Chat** in the Harness sidebar. Choose a configured model and start a conv
 - Stream replies, stop generation, copy messages, edit a user message or regenerate an answer. Old branches remain selectable.
 - Search titles and message bodies; rename, archive/restore, or delete a Chat and its owned attachments.
 - Pin a Chat to the top of the list, or export it as Markdown. Tool output and reasoning stay out of the export.
-- Replies that used the web list their pages beneath them. Read aloud uses only voices on your device; without one it says so rather than sending text to a speech service.
+- Replies list the web pages, saved memories and earlier chats they used beneath them. Read aloud uses only voices on your device; without one it says so rather than sending text to a speech service.
 - Upload text documents, extractable-text PDFs, and supported images. Scanned PDFs need OCR outside this plugin. Images require the explicit inline route below.
 - Web access is off by default. Turn it on for a request to use an existing Harness web provider; Chat never receives shell, arbitrary filesystem or deployment tools.
 

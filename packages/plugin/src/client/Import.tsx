@@ -11,7 +11,7 @@ import css from './PersonalChat.module.css'
 export function ImportPage({ state, commands, t }: { state: PersonalState; commands: PersonalCommands; t: TranslateNS<'personalChat'> }) {
   const [undo, setUndo] = useState<ImportBatch | undefined>()
   const preview = state.preview
-  return <div className={css.management}>
+  return <>
     <section><h2>{t('importTitle')}</h2><p className={css.muted}>{t('importBody')}</p>
       <label className={css.filePicker}>{t('chooseFile')}<input type="file" accept=".zip,.json,application/zip,application/json" disabled={state.busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void commands.preview(file) }} /></label>
       {state.busy && preview === undefined && <p className={css.muted} role="status">{t('loading')}</p>}
@@ -28,5 +28,5 @@ export function ImportPage({ state, commands, t }: { state: PersonalState; comma
     <Modal open={undo !== undefined} title={t('undoTitle')} description={t('undoBody')} closeLabel={t('cancel')} onClose={() => { if (!state.busy) setUndo(undefined) }} footer={<>
       <Button disabled={state.busy} onClick={() => { setUndo(undefined) }}>{t('cancel')}</Button><Button variant="primary" disabled={state.busy} onClick={() => { if (undo) void commands.undoImport(undo.id).then(ok => { if (ok) setUndo(undefined) }) }}>{t('undoConfirm')}</Button>
     </>} />
-  </div>
+  </>
 }

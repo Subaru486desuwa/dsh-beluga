@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { PersonalChatError } from './archive.ts'
-import { candidateReason, evidenceKey, fingerprint, normalized } from './memory.ts'
+import { candidateReason, evidenceKey, fingerprint, normalized, proposingChats } from './memory.ts'
 import type { Config } from './config.ts'
 import type { Conversations } from './conversations.ts'
 import type { MemoryLedger } from './records.ts'
@@ -19,7 +19,7 @@ export class PersonalMemory {
     const candidates = ledger.candidates.filter(candidate => !(candidate.state === 'pending' && candidate.source.kind === 'chat' && candidate.source.conversationId === id))
     if (candidates.length !== ledger.candidates.length) await this.saveLedger({ ...ledger, candidates })
   }
-  async state(request: { readonly conversationId?: ConversationId }): Promise<MemoryState> {
+  async state(request: { readonly conversationId?: ConversationId }): Promise<Omit<MemoryState, 'summary'>> {
     this.guard(request.conversationId)
     const { profile, memories, candidates } = this.chats.domain.global.get()
     const active = memories.filter(memory => memory.state === 'active')
@@ -40,7 +40,14 @@ export class PersonalMemory {
   private revision(actual: number, expected: number): void {
     if (actual !== expected) throw new PersonalChatError('stale-revision', 'This item changed; refresh before editing or approving it')
   }
-  private async saveLedger(ledger: MemoryLedger): Promise<void> { await this.chats.domain.global.set(ledger); this.chats.changed('memory') }
+  /** The list hears of it too when a chat starts or stops waiting on a memory proposal. */
+  private async saveLedger(ledger: MemoryLedger): Promise<void> {
+    const before = proposingChats(this.chats.domain.global.get().candidates)
+    await this.chats.domain.global.set(ledger)
+    this.chats.changed('memory')
+    const after = proposingChats(ledger.candidates)
+    if (before.size !== after.size || [...after].some(id => !before.has(id))) this.chats.changed('catalog')
+  }
   private memoryText(text: string): string {
     const value = text.trim()
     if (/-----BEGIN .{0,30}PRIVATE KEY|(?:api[_ -]?key|password|密码|密钥|令牌)\s*[:=：]/iu.test(value)) throw new PersonalChatError('secret-memory', 'Credentials and private keys cannot be stored as memory')
@@ -152,8 +159,17 @@ export class PersonalMemory {
       return updated
     })
   }
-  context(conversation: Conversation, query: string): string {
-    if (conversation.temporary) return ''
+  /**
+   * @param query - the person's message; Saved Memories sharing a word with it come along.
+   * @returns the context text for the model, and the Saved Memories it holds.
+   */
+  /** @returns Saved Memories whose text holds `query`, every one for an empty query, oldest first. */
+  saved(query: string): Memory[] {
+    const needle = normalized(query)
+    return this.chats.domain.global.get().memories.filter(memory => memory.state === 'active' && (!needle || normalized(memory.text).includes(needle)))
+  }
+  context(conversation: Conversation, query: string): { readonly text: string; readonly recalled: readonly MemoryId[] } {
+    if (conversation.temporary) return { text: '', recalled: [] }
     const ledger = this.chats.domain.global.get()
     const tokens: string[] = normalized(query).match(/[\p{L}\p{N}]{2,}/gu) ?? []
     for (const phrase of query.match(/[\p{Script=Han}]+/gu) ?? []) for (let i = 0; i + 1 < phrase.length; i++) tokens.push(phrase.slice(i, i + 2))
@@ -161,6 +177,6 @@ export class PersonalMemory {
     for (const memory of ledger.memories) if (memory.state === 'active' && tokens.some(token => normalized(memory.text).includes(token))) {
       if (Buffer.byteLength(JSON.stringify([...memories, memory])) <= this.config.maxSnapshotBytes) memories.push(memory)
     }
-    return JSON.stringify({ profile: { background: ledger.profile.background }, relatedMemories: memories })
+    return { text: JSON.stringify({ profile: { background: ledger.profile.background }, relatedMemories: memories }), recalled: memories.map(memory => memory.id) }
   }
 }

@@ -35,15 +35,22 @@ export interface Conversation {
   readonly archiveRevisions: readonly ArchiveRevisionId[]
   readonly selectedArchive?: ArchiveSelection
   readonly pinned?: boolean
+  /** Who wrote the title: a model after the first reply, or the person. Absent, it is the start of the first message or the imported title. */
+  readonly titleSource?: 'generated' | 'renamed'
   /** Later plugin conversation messages remain after import withdrawal. */
   readonly archiveWithdrawn: boolean
 }
 /** One history row; bodies are read with `get`. */
+/** How much a chat needs the person now: its turn is running, waiting for the person, finished while no one had it open, or none of these. */
+export type ChatActivity = 'running' | 'waiting' | 'replied' | 'idle'
 export interface ConversationSummary {
   readonly id: ConversationId
   readonly title: string
   readonly updatedAt: number
   readonly pinned: boolean
+  /** Archived chats are hidden from the list but still found by search. */
+  readonly archived: boolean
+  readonly activity: ChatActivity
 }
 export interface ArchiveNode {
   readonly id: string
@@ -97,15 +104,35 @@ export interface WebSource {
   readonly url: string
   readonly title?: string
 }
+/** One step of a turn's to-do list, as the model last wrote it. */
+export interface TodoItem {
+  readonly content: string
+  readonly status: 'pending' | 'in_progress' | 'completed'
+}
 export interface ChatMessageView {
   readonly id: string
   readonly role: 'user' | 'assistant' | 'tool'
   readonly text: string
   readonly reasoning?: string
+  /** How long the model reasoned before this message's first output. */
+  readonly thinkingMs?: number
   readonly time: number
   readonly attachmentIds: readonly string[]
   readonly toolNames: readonly string[]
+  /** The to-do list this message wrote, when it wrote one. */
+  readonly todos?: readonly TodoItem[]
   readonly sources?: readonly WebSource[]
+  /** Memory candidates this message proposed. */
+  readonly proposed?: readonly CandidateId[]
+  /** Saved Memories this message was given as context or looked up. */
+  readonly recalled?: readonly MemoryId[]
+  /** Earlier chats this message found, with their current titles; deleted chats are left out. */
+  readonly referenced?: readonly ChatReference[]
+}
+/** An earlier chat a reply found by searching. */
+export interface ChatReference {
+  readonly conversationId: ConversationId
+  readonly title: string
 }
 export interface ArtifactVersion {
   readonly rootId: string
@@ -128,6 +155,8 @@ export interface LiveTurn {
   readonly text: string
   readonly reasoning: string
   readonly tool?: string
+  /** How long the current model step had run when this view was built; the client counts on from its own clock. */
+  readonly stepElapsedMs: number
 }
 export interface ConversationDetail {
   readonly conversation: Conversation
@@ -137,7 +166,6 @@ export interface ConversationDetail {
   readonly live?: LiveTurn
   readonly model?: ModelRef
   readonly error?: string
-  readonly omittedMessages: number
 }
 export type ChatUpdate = { readonly kind: 'snapshot'; readonly detail: ConversationDetail }
   | { readonly kind: 'delta'; readonly turnId: string; readonly text: string; readonly reasoning: boolean }
@@ -177,7 +205,7 @@ export interface PersonalProfile {
   readonly source?: ProfileImportSource
   readonly instructions: string
   readonly autoSaveLowRisk: boolean
-  /** Whether the model may search earlier chats while replying. */
+  /** Whether the model may search earlier chats while replying, and whether the Memory Summary is kept and used. */
   readonly referenceChats: boolean
   readonly updatedAt: number
 }
@@ -210,7 +238,25 @@ export interface MemoryCandidate {
   readonly memoryId?: MemoryId
   readonly replaces?: MemoryId
 }
-export interface MemoryState { readonly profile: PersonalProfile; readonly memories: readonly Memory[]; readonly candidates: readonly MemoryCandidate[] }
+/** The Memory Summary as the memory page shows it. */
+export interface MemorySummaryView {
+  readonly revision: number
+  /** Markdown: an overview paragraph, then `## ` sections. Empty until the first update writes it. */
+  readonly text: string
+  /** Questions the person could ask next, written with the text. */
+  readonly suggestions: readonly string[]
+  /** When the text last changed; 0 before the first change. */
+  readonly updatedAt: number
+  readonly updating: boolean
+  /** Why the last update failed, as an error code; cleared by the next success. */
+  readonly error?: string
+  /** The route that writes the summary; absent means the route of the last message sent. */
+  readonly model?: ModelRef
+  /** Whether sensitive topics may be written into the summary. */
+  readonly sensitive: boolean
+  readonly canUndo: boolean
+}
+export interface MemoryState { readonly profile: PersonalProfile; readonly memories: readonly Memory[]; readonly candidates: readonly MemoryCandidate[]; readonly summary: MemorySummaryView }
 export interface CandidateInput {
   readonly conversationId?: ConversationId
   readonly text: string
@@ -245,6 +291,15 @@ export interface UploadLimits { readonly uploadBytes: number; readonly attachmen
   /** Whether the Office extension can render files here. */
   readonly office: boolean
 }
+/** Web search as the Apps page shows it. */
+export interface AppsView {
+  /** Web search and page reading through the Harness web provider; `auto` lets the model use them unasked. */
+  readonly web: { readonly available: boolean; readonly auto: boolean }
+}
+/** Settings the Apps page changes; absent fields stay as they are. */
+export interface AppsChange {
+  readonly webAuto?: boolean
+}
 export interface PersonalChatOperations {
   limits(): Promise<UploadLimits>
   models(): Promise<readonly ModelChoice[]>
@@ -257,6 +312,7 @@ export interface PersonalChatOperations {
   attachment(request: { readonly conversationId: ConversationId; readonly attachmentId: string; readonly original?: boolean }): Promise<{ readonly name: string; readonly mediaType: string; readonly base64: string }>
   follow(signal: AbortSignal): AsyncIterable<PersonalChange>
   followConversation(request: { readonly conversationId: ConversationId }, signal: AbortSignal): AsyncIterable<ChatUpdate>
+  /** @param request - `archived: true` lists only archived chats; otherwise unarchived chats, plus archived ones a non-empty `query` matches. */
   list(request: { readonly query?: string; readonly archived?: boolean }): Promise<readonly ConversationSummary[]>
   create(request: { readonly temporary: boolean }): Promise<ConversationDetail>
   get(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail>
@@ -280,6 +336,20 @@ export interface PersonalChatOperations {
   decideCandidate(request: { readonly conversationId?: ConversationId; readonly candidateId: CandidateId; readonly expectedRevision: number; readonly decision: 'confirm' | 'reject' }): Promise<MemoryCandidate>
   editMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number; readonly text: string }): Promise<Memory>
   forgetMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number }): Promise<Memory>
+  /** Start folding chats the summary does not reflect yet into it; returns once it has started. */
+  refreshSummary(request: { readonly conversationId?: ConversationId }): Promise<MemorySummaryView>
+  /** Answer a question about the summary, or apply a correction the person typed. */
+  askSummary(request: { readonly conversationId?: ConversationId; readonly text: string }): Promise<{ readonly reply: string; readonly summary: MemorySummaryView }>
+  /** Replace the summary with text the person typed, saved as written apart from removed credentials and contact details. */
+  editSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly text: string }): Promise<MemorySummaryView>
+  /** Put back the version before the latest change. */
+  undoSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number }): Promise<MemorySummaryView>
+  /** Empty the summary; chats it already reflected are not read again. */
+  clearSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number }): Promise<MemorySummaryView>
+  /** @param request - `model` absent follows the route of the last message sent. */
+  summaryOptions(request: { readonly conversationId?: ConversationId; readonly model?: ModelRef; readonly sensitive: boolean }): Promise<MemorySummaryView>
+  apps(): Promise<AppsView>
+  updateApps(request: AppsChange): Promise<AppsView>
 }
 
 declare module '@deepseek-ai/dsh-typert-protocol' {

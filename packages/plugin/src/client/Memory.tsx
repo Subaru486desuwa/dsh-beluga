@@ -1,4 +1,4 @@
-/** Reviewed profile, candidate approval, correction and forget controls. */
+/** Custom Instructions, the memory switches and saved memories, as Personalization in Settings shows them. */
 import { useState } from 'react'
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Memory, MemorySource, MemoryCandidate, MemoryState, PersonalProfile } from '../shared/types.ts'
@@ -6,16 +6,27 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PersonalCommands } from './contract.ts'
 import type { PersonalChatKey } from './locales.ts'
 import { parseMemoryImport } from './memory-import.ts'
+import { Check } from './Apps.tsx'
 import css from './PersonalChat.module.css'
 
-const reasons: Record<MemoryCandidate['reason'], PersonalChatKey> = { review: 'reasonReview', 'low-risk': 'reasonLowRisk', explicit: 'reasonExplicit', sensitive: 'reasonSensitive', inference: 'reasonInference', conflict: 'reasonConflict', archive: 'reasonArchive', suppressed: 'reasonSuppressed' }
+type T = TranslateNS<'personalChat'>
+/** Why a candidate waits for the person, in words. */
+export const CANDIDATE_REASONS: Readonly<Record<MemoryCandidate['reason'], PersonalChatKey>> = { review: 'reasonReview', 'low-risk': 'reasonLowRisk', explicit: 'reasonExplicit', sensitive: 'reasonSensitive', inference: 'reasonInference', conflict: 'reasonConflict', archive: 'reasonArchive', suppressed: 'reasonSuppressed' }
 
-function ProfileForm({ profile, commands, busy, t }: { profile: PersonalProfile; commands: PersonalCommands; busy: boolean; t: TranslateNS<'personalChat'> }) {
-  const [draft, setDraft] = useState(profile)
+/** Identifies the saved instruction text, so a switch saved meanwhile keeps an unsaved draft. @param profile - the saved profile. @returns a key that changes only with the instruction text. */
+export function instructionsKey(profile: PersonalProfile): string { return [profile.background, profile.instructions, profile.source?.fileName ?? ''].join('\u0000') }
+
+/**
+ * About the person and how to respond, edited as a draft and saved with the switches the profile has now.
+ * Remount it with {@link instructionsKey} so a save elsewhere replaces the draft only when the text changed.
+ * @param props - the saved profile and the save command.
+ * @returns the Custom Instructions form.
+ */
+export function CustomInstructions({ profile, commands, busy, t }: { profile: PersonalProfile; commands: PersonalCommands; busy: boolean; t: T }) {
+  const [draft, setDraft] = useState<Pick<PersonalProfile, 'background' | 'instructions' | 'source'>>(() => ({ background: profile.background, instructions: profile.instructions, ...(profile.source ? { source: profile.source } : {}) }))
   const [fileError, setFileError] = useState(false)
   const [importTarget, setImportTarget] = useState<'background' | 'instructions'>('instructions')
-  return <form className={css.profileForm} onSubmit={event => { event.preventDefault(); void commands.updateProfile(draft) }}>
-    <h2>{t('profile')}</h2>
+  return <form className={css.profileForm} onSubmit={event => { event.preventDefault(); void commands.updateProfile({ ...profile, ...draft }) }}>
     <label>{t('background')}<textarea className={css.textarea} value={draft.background} onChange={event => { setDraft({ ...draft, background: event.target.value }) }} /></label>
     <label>{t('instructions')}<textarea className={css.textarea} value={draft.instructions} onChange={event => { setDraft({ ...draft, instructions: event.target.value }) }} /></label>
     <label>{t('importEntry')}<select value={importTarget} onChange={event => { setImportTarget(event.target.value as 'background' | 'instructions') }}><option value="instructions">{t('instructions')}</option><option value="background">{t('background')}</option></select></label>
@@ -30,14 +41,20 @@ function ProfileForm({ profile, commands, busy, t }: { profile: PersonalProfile;
     {draft.source?.kind === 'agents' && <p className={css.notice}>{t('agentsReview')}</p>}
     {draft.source && <p className={css.muted}>{t('importedFrom', { name: draft.source.fileName })} · {t('personalScope')}</p>}
     {fileError && <p role="alert" className={css.notice}>{t('failed')}</p>}
-    <label className={css.check}><input type="checkbox" checked={draft.autoSaveLowRisk} onChange={event => { setDraft({ ...draft, autoSaveLowRisk: event.target.checked }) }} />{t('autoSave')}</label>
-    <label className={css.check}><input type="checkbox" checked={draft.referenceChats} onChange={event => { setDraft({ ...draft, referenceChats: event.target.checked }) }} />{t('referenceChats')}</label>
-    <Button type="submit" variant="primary" disabled={busy}>{t('profileSave')}</Button>
+    <Button type="submit" variant="primary" disabled={busy}>{t('customInstructionsSave')}</Button>
   </form>
 }
 
-/** Show authoritative revisions; sensitive and inferred candidates always need an explicit action. @param props - Host memory snapshot and commands. @returns management page. */
-export function MemoryPage({ memory, commands, busy, canAdd, t }: { canAdd: boolean; memory: MemoryState; commands: PersonalCommands; busy: boolean; t: TranslateNS<'personalChat'> }) {
+/** Each switch saves as soon as it changes. @param props - the saved profile and the save command. @returns the memory switches. */
+export function MemorySwitches({ profile, commands, busy, t }: { profile: PersonalProfile; commands: PersonalCommands; busy: boolean; t: T }) {
+  return <div className={css.settingsChecks}>
+    <Check checked={profile.autoSaveLowRisk} disabled={busy} label={t('autoSave')} hint={t('autoSaveHint')} onChange={autoSaveLowRisk => { void commands.updateProfile({ ...profile, autoSaveLowRisk }) }} />
+    <Check checked={profile.referenceChats} disabled={busy} label={t('referenceChats')} hint={t('referenceChatsHint')} onChange={referenceChats => { void commands.updateProfile({ ...profile, referenceChats }) }} />
+  </div>
+}
+
+/** Show authoritative revisions; sensitive and inferred candidates always need an explicit action. @param props - Host memory snapshot and commands. @returns candidates awaiting approval and saved memories. */
+export function SavedMemories({ memory, commands, busy, canAdd, t }: { canAdd: boolean; memory: MemoryState; commands: PersonalCommands; busy: boolean; t: T }) {
   const [addition, setAddition] = useState<{ text: string; category: Memory['category']; source: MemorySource } | undefined>()
   const [imported, setImported] = useState<readonly { text: string; category: Memory['category'] }[]>([])
   const [importError, setImportError] = useState(false)
@@ -45,14 +62,13 @@ export function MemoryPage({ memory, commands, busy, canAdd, t }: { canAdd: bool
   const [editing, setEditing] = useState<{ memory: Memory; text: string } | undefined>()
   const candidates = memory.candidates.filter(candidate => candidate.state === 'pending')
   const active = memory.memories.filter(item => item.state === 'active')
-  return <div className={css.management}>
-    <ProfileForm key={memory.profile.revision} profile={memory.profile} commands={commands} busy={busy} t={t} />
+  return <>
     {candidates.length > 0 && <section><h2>{t('candidates')}</h2><ul className={css.recordList}>{candidates.map(candidate => <li key={candidate.id}>
       <p className={css.messageText}>{candidate.text}</p>{candidate.replaces && <blockquote>{t('replaces')}: {memory.memories.find(item => item.id === candidate.replaces)?.text ?? candidate.replaces}</blockquote>}
-      <p className={css.muted}>{t('candidateReason', { reason: t(reasons[candidate.reason]) })}</p>
+      <p className={css.muted}>{t('candidateReason', { reason: t(CANDIDATE_REASONS[candidate.reason]) })}</p>
       <div className={css.rowActions}><Button size="sm" variant="outline" disabled={busy} onClick={() => { void commands.decide(candidate, 'confirm') }}>{t('confirm')}</Button><Button size="sm" disabled={busy} onClick={() => { void commands.decide(candidate, 'reject') }}>{t('reject')}</Button></div>
     </li>)}</ul></section>}
-    <section><div className={css.historyHead}><h2>{t('memories')}</h2>{canAdd && <Button size="sm" disabled={busy} onClick={() => { setAddition({ text: '', category: 'fact', source: { kind: 'manual' } }); setImported([]); setImportError(false) }}>{t('addMemory')}</Button>}</div>{active.length === 0 ? <p className={css.muted}>{t('noMemories')}</p> : <ul className={css.recordList}>{active.map(item => <li key={item.id}>
+    <section><div className={css.sectionHead}><h2>{t('memories')}</h2>{canAdd && <Button size="sm" disabled={busy} onClick={() => { setAddition({ text: '', category: 'fact', source: { kind: 'manual' } }); setImported([]); setImportError(false) }}>{t('addMemory')}</Button>}</div>{active.length === 0 ? <p className={css.muted}>{t('noMemories')}</p> : <ul className={css.recordList}>{active.map(item => <li key={item.id}>
       <p className={css.messageText}>{item.text}</p>
       <div className={css.messageMeta}><span>{t('personalScope')}</span><time>{new Date(item.updatedAt).toLocaleString()}</time></div>
       <details className={css.source}><summary>{t('source')}</summary><p>{item.source.kind === 'manual' ? t('sourceManual') : item.source.kind === 'chat' ? t('sourceSession') : item.source.kind === 'archive' ? t('sourceArchive') : t('importedFrom', { name: item.source.fileName })}</p>
@@ -85,5 +101,5 @@ export function MemoryPage({ memory, commands, busy, canAdd, t }: { canAdd: bool
     <Modal open={editing !== undefined} title={t('memoryEdit')} closeLabel={t('cancel')} onClose={() => { if (!busy) setEditing(undefined) }} footer={<>
       <Button disabled={busy} onClick={() => { setEditing(undefined) }}>{t('cancel')}</Button><Button variant="primary" disabled={busy || !editing?.text.trim()} onClick={() => { if (editing) void commands.editMemory(editing.memory, editing.text).then(ok => { if (ok) setEditing(undefined) }) }}>{t('save')}</Button>
     </>}><textarea className={css.textarea} aria-label={t('memoryText')} value={editing?.text ?? ''} onChange={event => { if (editing) setEditing({ ...editing, text: event.target.value }) }} /></Modal>
-  </div>
+  </>
 }

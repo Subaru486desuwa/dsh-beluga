@@ -8,14 +8,16 @@ import { PersonalChatError } from './archive.ts'
 import { Lru } from './lru.ts'
 import { normalized } from './memory.ts'
 import { pacing } from './pacing.ts'
-import { archiveRecord, chatEntry, consistent, conversationHead, importBatch, memoryLedger, textOf, type ArchiveRecord, type ConversationRecord, type MemoryLedger } from './records.ts'
+import { appSettings, archiveRecord, chatEntry, consistent, conversationHead, importBatch, memoryLedger, modelPreferences, summaryRecord, textOf, type AppSettings, type ArchiveRecord, type ConversationRecord, type MemoryLedger, type ModelPreferences, type SummaryRecord } from './records.ts'
 import type * as T from '../shared/types.ts'
 
-const VERSION = 4
+const VERSION = 5
 /** Statements that lift a database from the version they are keyed by to the next one. */
 const UPGRADES: Readonly<Record<number, string>> = {
   2: 'ALTER TABLE personal_chat_conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;',
   3: 'DROP TABLE personal_chat_documents;',
+  // A chat appears in the list once it holds a message or an import; empty drafts stay out.
+  4: 'UPDATE personal_chat_conversations SET listed=0 WHERE listed=1 AND pending=0 AND NOT EXISTS (SELECT 1 FROM personal_chat_entries e WHERE e.conversation_id=personal_chat_conversations.id) AND NOT EXISTS (SELECT 1 FROM personal_chat_archives a WHERE a.conversation_id=personal_chat_conversations.id);',
 }
 /** Bounds the assembled conversations held in memory, counted in entries. */
 const CACHED_ENTRIES = 20000
@@ -50,6 +52,9 @@ interface Table<K extends string, V> {
   delete(key: K): Promise<boolean>
 }
 const initial: MemoryLedger = { profile: { revision: 0, background: '', instructions: '', autoSaveLowRisk: true, referenceChats: true, updatedAt: 0 }, memories: [], candidates: [], suppressed: [] }
+/** Tools are there when the model needs them. */
+const defaultApps: AppSettings = { webAuto: true }
+const emptySummary: SummaryRecord = { revision: 0, text: '', suggestions: [], updatedAt: 0, history: [], progress: {}, collectedAt: 0, lastRunAt: 0, sensitive: false }
 /** One match in an earlier chat, for the model to quote. */
 export interface ChatExcerpt { readonly conversationId: T.ConversationId; readonly title: string; readonly updatedAt: number; readonly excerpt: string }
 /** The statements needed to reach this version; a database they cannot lift is left untouched. */
@@ -75,10 +80,28 @@ export class PersonalStore {
   private readonly records = new Lru<T.ConversationId, ConversationRecord>(CACHED_ENTRIES, record => record.entries.length + 1)
   readonly batches: Table<T.ImportBatchId, T.ImportBatch>
   readonly global: { get(): MemoryLedger; set(value: MemoryLedger): Promise<void> }
+  readonly preferences: { get(): ModelPreferences; set(value: ModelPreferences): Promise<void> }
+  readonly summary: { get(): SummaryRecord; set(value: SummaryRecord): Promise<void> }
+  readonly apps: { get(): AppSettings; set(value: AppSettings): Promise<void> }
+  /** Chats whose last turn ended while no one had them open, until someone opens them. */
+  readonly unseen: { get(): readonly T.ConversationId[]; set(value: readonly T.ConversationId[]): Promise<void> }
   private constructor(private readonly db: DatabaseSync, private readonly release: () => Promise<void>) {
     this.batches = this.makeTable('batches', importBatch, value => value.id)
     const globals = this.makeTable<string, MemoryLedger>('global', memoryLedger)
     this.global = { get: () => globals.get('memory') ?? structuredClone(initial), set: value => globals.put('memory', value) }
+    const preferences = this.makeTable<string, ModelPreferences>('preferences', modelPreferences)
+    this.preferences = { get: () => preferences.get('model') ?? { efforts: {} }, set: value => preferences.put('model', value) }
+    const summaries = this.makeTable<string, SummaryRecord>('summary', summaryRecord)
+    this.summary = { get: () => summaries.get('memory') ?? structuredClone(emptySummary), set: value => summaries.put('memory', value) }
+    const apps = this.makeTable<string, AppSettings>('apps', appSettings)
+    this.apps = { get: () => apps.get('settings') ?? defaultApps, set: value => apps.put('settings', value) }
+    const unseen = this.makeTable<string, readonly T.ConversationId[]>('unseen', z.array(z.string().transform(brandString<T.ConversationId>)))
+    this.unseen = { get: () => unseen.get('replies') ?? [], set: value => unseen.put('replies', value) }
+  }
+  /** Listed chats changed at or after `time`, oldest change first; running and deleting ones wait. */
+  changedSince(time: number): T.ConversationId[] {
+    this.available()
+    return this.sql('SELECT id FROM personal_chat_conversations WHERE listed=1 AND pending=0 AND updated_at>=? ORDER BY updated_at').all(time).map(row => String(row.id) as T.ConversationId)
   }
   static async open(directory: string): Promise<PersonalStore> {
     await mkdir(directory, { recursive: true, mode: 0o700 })
@@ -150,10 +173,10 @@ export class PersonalStore {
     const head = conversationHead.parse(rest)
     const record: ConversationRecord = { ...head, entries: [...known, ...added] }
     if (!consistent(record)) throw new PersonalChatError('invalid-storage', 'Conversation identities or owned references are inconsistent')
-    const { title, updatedAt, archived, pinned, branches, archiveRevisions } = head.conversation
+    const { title, updatedAt, archived, pinned, archiveRevisions } = head.conversation
     this.atomic(() => {
       this.sql('INSERT INTO personal_chat_conversations(id,title,title_key,updated_at,archived,listed,pending,value,pinned) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,title_key=excluded.title_key,updated_at=excluded.updated_at,archived=excluded.archived,listed=excluded.listed,pending=excluded.pending,value=excluded.value,pinned=excluded.pinned')
-        .run(id, title, normalized(title), updatedAt, archived ? 1 : 0, !head.deleting && (branches.length > 0 || archiveRevisions.length > 0) ? 1 : 0, head.deleting || head.running ? 1 : 0, JSON.stringify(head), pinned ? 1 : 0)
+        .run(id, title, normalized(title), updatedAt, archived ? 1 : 0, !head.deleting && (record.entries.length > 0 || archiveRevisions.length > 0) ? 1 : 0, head.deleting || head.running ? 1 : 0, JSON.stringify(head), pinned ? 1 : 0)
       for (const [offset, entry] of added.entries()) {
         this.sql('INSERT INTO personal_chat_entries(conversation_id,seq,value) VALUES(?,?,?)').run(id, known.length + offset, JSON.stringify(entry))
         // Tool output is not conversation: it can quote web pages, or a memory forgotten later.
@@ -161,6 +184,19 @@ export class PersonalStore {
       }
     })
     this.records.set(id, record)
+  }
+  /**
+   * @param ids - chats a reply referenced.
+   * @returns the current titles of those still in the list, archived ones included.
+   */
+  titles(ids: readonly T.ConversationId[]): Map<T.ConversationId, string> {
+    this.available()
+    const found = new Map<T.ConversationId, string>()
+    for (const id of new Set(ids)) {
+      const row = this.sql('SELECT title FROM personal_chat_conversations WHERE id=? AND listed=1').get(id)
+      if (row) found.set(id, String(row.title))
+    }
+    return found
   }
   /** Remove a conversation with everything derived from it, including its search text. */
   removeConversation(id: T.ConversationId): void {
@@ -172,30 +208,36 @@ export class PersonalStore {
     this.records.delete(id)
   }
   /** Conversations a previous run left mid-turn or mid-delete. */
+  /** Saved chats that never received a message or an import, such as a new chat left before sending. */
+  drafts(): T.ConversationId[] {
+    this.available()
+    return this.sql('SELECT id FROM personal_chat_conversations WHERE listed=0 AND pending=0').all().map(row => brandString<T.ConversationId>(String(row.id)))
+  }
   interrupted(): T.ConversationId[] {
     this.available()
     return this.sql('SELECT id FROM personal_chat_conversations WHERE pending=1').all().map(row => brandString<T.ConversationId>(String(row.id)))
   }
   /**
    * List conversations from plain columns, without decoding any conversation.
-   * @param filter - `query` is a substring of a title, a message or an imported node.
+   * @param filter - `query` is a substring of a title, a message or an imported node. `archived: true` lists only archived chats; otherwise unarchived chats, plus archived ones a non-empty query matches.
    * @returns matching summaries, pinned ones first, then newest first.
    */
-  async catalog(filter: { readonly query: string; readonly archived: boolean }): Promise<T.ConversationSummary[]> {
+  async catalog(filter: { readonly query: string; readonly archived: boolean }): Promise<Omit<T.ConversationSummary, 'activity'>[]> {
     this.available()
     const query = normalized(filter.query)
     const containing = query ? await this.containing(query) : undefined
     this.available()
-    return this.sql('SELECT id,title,title_key,updated_at,pinned FROM personal_chat_conversations WHERE listed=1 AND archived=? ORDER BY pinned DESC, updated_at DESC').all(filter.archived ? 1 : 0)
+    const archived = filter.archived ? 'AND archived=1' : query ? '' : 'AND archived=0'
+    return this.sql(`SELECT id,title,title_key,updated_at,pinned,archived FROM personal_chat_conversations WHERE listed=1 ${archived} ORDER BY pinned DESC, updated_at DESC`).all()
       .filter(row => !containing || containing.has(String(row.id)) || String(row.title_key).includes(query))
-      .map(row => ({ id: brandString<T.ConversationId>(String(row.id)), title: String(row.title), updatedAt: Number(row.updated_at), pinned: row.pinned === 1 }))
+      .map(row => ({ id: brandString<T.ConversationId>(String(row.id)), title: String(row.title), updatedAt: Number(row.updated_at), pinned: row.pinned === 1, archived: row.archived === 1 }))
   }
   /**
    * Find what earlier chats said, most recent first, for one model tool call.
    * Imported history stays out: it reaches a model only when the user continues it.
    * @param query - a substring of a message.
    * @param asking - the chat that is asking; its own text is already in context.
-   * @returns one excerpt from each matching active chat, up to {@link EXCERPT_CHATS}.
+   * @returns one excerpt from each matching chat, archived ones included, up to {@link EXCERPT_CHATS}.
    */
   async excerpts(query: string, asking: T.ConversationId): Promise<ChatExcerpt[]> {
     const needle = normalized(query)
@@ -204,7 +246,7 @@ export class PersonalStore {
     let high = Number(this.sql('SELECT COALESCE(MAX(id),0) AS id FROM personal_chat_search_text').get()!.id)
     while (high > 0 && found.size < EXCERPT_CHATS) {
       this.available()
-      const rows = this.sql('SELECT s.conversation_id AS id,c.title,c.updated_at,substr(s.text,MAX(instr(s.text,?)-?,1),?) AS excerpt FROM personal_chat_search_text s JOIN personal_chat_conversations c ON c.id=s.conversation_id WHERE s.id>? AND s.id<=? AND s.revision_id IS NULL AND instr(s.text,?)>0 AND c.listed=1 AND c.archived=0 AND c.id<>? ORDER BY s.id DESC').all(needle, EXCERPT_CHARS / 2, EXCERPT_CHARS, high - SCAN_WINDOW, high, needle, asking)
+      const rows = this.sql('SELECT s.conversation_id AS id,c.title,c.updated_at,substr(s.text,MAX(instr(s.text,?)-?,1),?) AS excerpt FROM personal_chat_search_text s JOIN personal_chat_conversations c ON c.id=s.conversation_id WHERE s.id>? AND s.id<=? AND s.revision_id IS NULL AND instr(s.text,?)>0 AND c.listed=1 AND c.id<>? ORDER BY s.id DESC').all(needle, EXCERPT_CHARS / 2, EXCERPT_CHARS, high - SCAN_WINDOW, high, needle, asking)
       for (const row of rows) {
         const conversationId = brandString<T.ConversationId>(String(row.id))
         if (!found.has(conversationId) && found.size < EXCERPT_CHATS) found.set(conversationId, { conversationId, title: String(row.title), updatedAt: Number(row.updated_at), excerpt: String(row.excerpt) })

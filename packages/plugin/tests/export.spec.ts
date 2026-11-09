@@ -5,7 +5,7 @@ import type { ConversationDetail } from '../src/shared/types.ts'
 
 const labels = { user: 'You', assistant: 'Assistant' }
 const message = (id: string, role: string, text: string, extra: object = {}) => ({ id, role, text, time: 0, attachmentIds: [], toolNames: [], ...extra })
-const detail = (value: object) => ({ conversation: { title: 'Trip plan' }, attachments: [], messages: [], omittedMessages: 0, ...value }) as unknown as ConversationDetail
+const detail = (value: object) => ({ conversation: { title: 'Trip plan' }, attachments: [], messages: [], ...value }) as unknown as ConversationDetail
 
 describe('conversation export', () => {
   it('writes the visible conversation and skips tool output', () => {

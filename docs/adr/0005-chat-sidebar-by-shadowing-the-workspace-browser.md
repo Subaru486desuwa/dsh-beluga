@@ -1,0 +1,7 @@
+# Chat's sidebar shadows the workspace browser while Chat is open
+
+Chat mode shows one sidebar whose navigation region lists Beluga's chats, while Work mode keeps the stock workspace browser. Beluga does this from its own client plugin, without patching Harness: while its panel is selected it registers its navigation in the single `sidebar.workspaces` slot at a priority below the stock entry, and disposes that registration when the person selects Work or another panel, so the stock browser renders again unchanged. Beluga also adds a Work row to the panel list; selecting it returns to the Conversation view.
+
+The stock New Session button is written into `SidebarRoot` and has no slot, so in Chat mode it stays at the top of the column and still starts a Work session; Beluga's region opens with New chat. The stock browser remounts on each return to Work, keeping its stored view but not its search text or scroll position.
+
+A patched Harness was rejected because the person would have to carry the patch across every Harness upgrade beside the Beluga repository. Deep imports of `ui-sidebar` or `ui-workspace` internals were rejected because those files are not exported and change between releases. Beluga depends on the `sidebar.workspaces` slot name, its `wide` and `expandSidebar` props and single-slot priority shadowing, which each Harness upgrade must be checked against. If Harness publishes seats that let the selected panel supply the sidebar's navigation and primary action, Beluga moves to them and drops the shadowing.

@@ -1,16 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import { ChatMessages } from '../src/client/Chat.tsx'
 import { FilePreview } from '../src/client/Preview.tsx'
 import type { PersonalState } from '../src/client/model.ts'
 import type { PersonalCommands } from '../src/client/contract.ts'
 import type { ChatAttachment, OfficePreview } from '../src/shared/types.ts'
-vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
-  Button: ({ variant: _variant, size: _size, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string }) => <button {...props} />,
-  MarkdownText: () => null, Modal: ({ children, title }: { children: ReactNode; title: string }) => <section aria-label={title}>{children}</section>, writeClipboard: vi.fn(),
-}))
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => (await import('./primitives-mock.tsx')).primitives())
 afterEach(cleanup)
 const file = { id: 'file', conversationId: 'chat', name: '预算.xlsx', bytes: 1024, image: false, mediaType: 'application/octet-stream' } as unknown as ChatAttachment
 const page = { width: 800, height: 400, base64: 'AAAA' }
@@ -54,9 +50,9 @@ describe('previewing a file', () => {
 describe('file card actions', () => {
   const state = (temporary: boolean, office: boolean, name = '预算.xlsx') => ({
     busy: false, limits: { office },
-    detail: { conversation: { id: 'chat', temporary }, messages: [{ id: 'user', role: 'user', text: 'x', time: 0, attachmentIds: ['file'], toolNames: [] }], attachments: [{ ...file, name }], omittedMessages: 0 },
+    detail: { conversation: { id: 'chat', temporary }, messages: [{ id: 'user', role: 'user', text: 'x', time: 0, attachmentIds: ['file'], toolNames: [] }], attachments: [{ ...file, name }] },
   }) as unknown as PersonalState
-  const actions = () => screen.queryAllByRole('button').map(button => button.textContent).filter(label => label === 'previewFile' || label === 'exportPdf')
+  const actions = () => screen.queryAllByRole('button').map(button => button.getAttribute('aria-label')).filter(label => label === 'previewFile' || label === 'exportPdf')
   it('offers preview and PDF for a saved Office file', () => {
     render(<ChatMessages state={state(false, true)} commands={{} as PersonalCommands} t={t} />)
     expect(actions()).toEqual(['previewFile', 'exportPdf'])

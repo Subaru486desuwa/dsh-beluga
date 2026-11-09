@@ -33,20 +33,21 @@ dsh plugin --profile web add ./dsh-beluga-0.1.0.tgz
 dsh --profile web
 ```
 
-Open **Chat** in the Harness sidebar. Choose a configured model and start a conversation. The **Work** button returns to the existing Work view without changing its selected session. The bundle adds only its own loader row; it does not replace official plugins or patch Harness.
+Open **Chat** in the Harness sidebar and start a conversation. The chat's title sits at the top left: after the first reply, the model writes a short title from the first exchange, once; a chat you renamed keeps your name, and earlier chats keep theirs (`autoTitles` turns this off). The button at the right of the message box names the model and reasoning effort: open it to drag the effort slider, or pick the model name to switch models. While Chat is open, the sidebar lists your chats where the workspace browser usually is: pinned chats first, then the rest by date, or by what needs you (running, waiting for you, new reply) from the sort menu. A spinner marks a reply in progress, a ring a chat waiting for you (an action to approve or a memory to review), and a dot a reply that finished while the chat was not open. Search finds archived chats too and tags them. **Settings** at the foot of the list opens one dialog with General, Personalization, Apps and Data controls. The **Work** row above Chat returns to the Work view without changing its selected session; the New Session button at the top still starts a Work session. The bundle adds only its own loader row; it does not replace official plugins or patch Harness.
 
 ## Conversations and files
 
 - Stream replies, stop generation, copy messages, edit a user message or regenerate an answer. Old branches remain selectable.
-- Search titles and message bodies; rename, archive/restore, or delete a Chat and its owned attachments.
+- Long chats keep their whole history in view. When a chat outgrows what one model request carries (`maxContextBytes`, 512 KiB by default, less for a model with a smaller context window), older tool results are left out first, then the model condenses the oldest turns in the background so later replies still know them.
+- Search titles and message bodies; rename, archive, or delete a Chat and its owned attachments. Archiving only hides a chat from the list: search still finds it, the model can still search it, and it still feeds the memory summary. Deleting is how Beluga forgets a chat. Archived chats are opened, unarchived or deleted in **Settings → Data controls**.
 - Pin a Chat to the top of the list, or export it as Markdown. Tool output and reasoning stay out of the export.
-- Replies that used the web list their pages beneath them. Read aloud uses only voices on your device; without one it says so rather than sending text to a speech service.
+- Replies list their sources beneath them: web pages, the saved memories they used, and earlier chats they found, which open on a click. The memory summary and custom instructions go with every reply and are not listed. Read aloud uses only voices on your device; without one it says so rather than sending text to a speech service.
 - Upload text documents, extractable-text PDFs, and supported images. Scanned PDFs need OCR outside this plugin. Images require the explicit inline route below.
-- Web access is off by default. Turn it on for a request to use an existing Harness web provider; Chat never receives shell, arbitrary filesystem or deployment tools.
+- When Harness has a web provider, the model searches the web when a question needs it. Turn that off in **Settings → Apps**; then only a message sent with **Web search** picked from the + menu searches. Chat never receives shell, arbitrary filesystem or deployment tools.
 
 ## Import ChatGPT history
 
-Open **Import** → select an official export ZIP or conversation JSON → review counts and warnings → **Import**.
+Open **Settings → Data controls → Import ChatGPT** → select an official export ZIP or conversation JSON → review counts and warnings → **Import**.
 
 A ZIP can be far larger than the upload limit. The browser reads only its conversation JSON, either one `conversations.json` or numbered `conversations-000.json` files, and uploads that. Media stays on your device.
 
@@ -56,13 +57,15 @@ Continue directly below an imported branch. The model receives a bounded, explic
 
 Defaults: 64 MiB upload (for a ZIP, once media is left out), 256 MiB extracted conversation JSON, 10,000 conversations, 500,000 total mapping nodes and 512 MiB stored archives. An unsupported or malformed record rejects the preview instead of silently dropping it. Checked against one real official export from November 2026; repository fixtures stay synthetic. Other exports may differ.
 
-## Profile and memory
+## Personalization and memory
 
-**Memory** contains your background, personal instructions, confirmed facts and review queue. The profile is included independently of keyword recall. Only narrowly recognized, source-grounded low-risk preferences can save automatically; sensitive, inferred and conflicting proposals require confirmation. New automatic memories offer undo. Correcting a fact supersedes it; forgetting suppresses automatic relearning of its text or old evidence.
+**Settings → Personalization** holds your custom instructions (about you, and how to respond), the memory switches, the memory summary, and saved memories with their review queue. Each switch saves as soon as it changes. Custom instructions are included independently of keyword recall. Only narrowly recognized, source-grounded low-risk preferences can save automatically; sensitive, inferred and conflicting proposals require confirmation. A memory a reply proposes appears under that reply: undo one saved automatically, or save or dismiss one awaiting review; until then the chat shows as waiting for you in the list. A memory another chat saves automatically gets a notice with undo. Correcting a fact supersedes it; forgetting suppresses automatic relearning of its text or old evidence.
+
+The **memory summary** is an overview of you that the model writes from your normal chats once they are idle, at most every six hours; later normal chats use it as background. Temporary Chat and imported history never feed it. It records only what you said or confirmed: drafts, translations or role-play you asked for, text you pasted and hypotheticals are not taken as your views. An update changes only the sections it needs to and leaves the others exactly as they were. Choose **Edit** in its menu to change the text yourself or paste a summary you already have. It is saved as typed, without a model, except that credentials, long numbers and email addresses are removed. **Restore previous version** undoes the latest change.
 
 Saved-memory text/JSON and instruction Markdown can be reviewed here. Importing `AGENTS.md` requires personal-scope review; it never edits the source file or Work rules. Do not import credentials. A conversation export does not automatically reconstruct ChatGPT's separate saved-memory store.
 
-While replying, the model can search your earlier chats and quote excerpts, which go to the selected model provider. Turn this off on the Memory page. Temporary Chat, archived chats and imported originals are not searched; imported history reaches a model only when you continue it. Forgetting a memory does not delete the chat it came from, so the model may still find it there; delete that chat if needed.
+While replying, the model can search your earlier chats and quote excerpts, which go to the selected model provider. Turn this off in Personalization. Temporary Chat and imported originals are not searched, while archived chats are; imported history reaches a model only when you continue it. Forgetting a memory does not delete the chat it came from, so the model may still find it there; delete that chat if needed.
 
 ## Temporary Chat
 
@@ -88,7 +91,7 @@ Select the model labeled **Inline images**. This route uses the provider API, no
 
 ## Data and removal
 
-Owned data lives under `$DSH_HOME/personal-chat`: a private SQLite database and attachments. Back up that directory while the profile is stopped. Deleting a chat removes its history/files but retains separately confirmed memories; forget those in Memory. Uninstalling the package does not delete personal data:
+Owned data lives under `$DSH_HOME/personal-chat`: a private SQLite database and attachments. Back up that directory while the profile is stopped. Deleting a chat removes its history/files but retains separately confirmed memories; forget those in **Settings → Personalization**. Uninstalling the package does not delete personal data:
 
 A newer version upgrades the database in place on first start; older versions then refuse it, so back up first.
 
