@@ -10,6 +10,10 @@ export type ImportBatchId = Branded<'PersonalImportBatchId'>
 export type ImportPreviewId = Branded<'PersonalImportPreviewId'>
 export type MemoryId = Branded<'PersonalMemoryId'>
 export type CandidateId = Branded<'PersonalCandidateId'>
+/** A Work workspace, as Harness names it. */
+export type WorkspaceRef = Branded<'PersonalWorkspaceRef'>
+/** A Work session, as Harness names it. */
+export type WorkSessionRef = Branded<'PersonalWorkSessionRef'>
 
 export interface ArchiveSelection { readonly revisionId: ArchiveRevisionId; readonly nodeId: string }
 export interface ChatBranch {
@@ -34,14 +38,23 @@ export interface Conversation {
   readonly selectedBranchId?: BranchId
   readonly archiveRevisions: readonly ArchiveRevisionId[]
   readonly selectedArchive?: ArchiveSelection
+  readonly pinned?: boolean
+  /** Who wrote the title: a model after the first reply, or the person. Absent, it is the start of the first message or the imported title. */
+  readonly titleSource?: 'generated' | 'renamed'
   /** Later plugin conversation messages remain after import withdrawal. */
   readonly archiveWithdrawn: boolean
 }
 /** One history row; bodies are read with `get`. */
+/** How much a chat needs the person now: its turn is running, waiting for the person, finished while no one had it open, or none of these. */
+export type ChatActivity = 'running' | 'waiting' | 'replied' | 'idle'
 export interface ConversationSummary {
   readonly id: ConversationId
   readonly title: string
   readonly updatedAt: number
+  readonly pinned: boolean
+  /** Archived chats are hidden from the list but still found by search. */
+  readonly archived: boolean
+  readonly activity: ChatActivity
 }
 export interface ArchiveNode {
   readonly id: string
@@ -51,6 +64,8 @@ export interface ArchiveNode {
   readonly time: JsonValue
   readonly text: string
   readonly structural: boolean
+  /** Working material the model wrote while answering, kept in the original but not shown or sent. */
+  readonly reasoning: boolean
   readonly unsupportedContent: boolean
 }
 export interface ArchiveView {
@@ -65,14 +80,70 @@ export interface ArchiveView {
   readonly original: Record<string, JsonValue>
   readonly warnings: readonly string[]
 }
+/** One Office file shown as images: a document's first pages, or the start of one worksheet. */
+export interface OfficePreview {
+  readonly pages: readonly { readonly base64: string; readonly width: number; readonly height: number }[]
+  /** Pages in the document; a worksheet counts its images. */
+  readonly pageCount: number
+  readonly missingFonts: readonly string[]
+  readonly sheets?: readonly string[]
+  readonly sheet?: string
+  readonly range?: string
+  /** The worksheet goes on past the range shown. */
+  readonly clipped?: boolean
+}
+/** A cell as read from a saved workbook. */
+export type SheetCell = string | number | boolean | null
+/** One rectangle of a worksheet, for the model. */
+export interface SheetRange {
+  readonly sheet: string
+  readonly range: string
+  readonly rows: readonly (readonly SheetCell[])[]
+  readonly formulas: Readonly<Record<string, string>>
+  /** What to read next when the request was larger than one answer. */
+  readonly nextRange?: string
+}
+/** A page a reply consulted. */
+export interface WebSource {
+  readonly url: string
+  readonly title?: string
+}
+/** One step of a turn's to-do list, as the model last wrote it. */
+export interface TodoItem {
+  readonly content: string
+  readonly status: 'pending' | 'in_progress' | 'completed'
+}
 export interface ChatMessageView {
   readonly id: string
   readonly role: 'user' | 'assistant' | 'tool'
   readonly text: string
   readonly reasoning?: string
+  /** How long the model reasoned before this message's first output. */
+  readonly thinkingMs?: number
   readonly time: number
   readonly attachmentIds: readonly string[]
   readonly toolNames: readonly string[]
+  /** The to-do list this message wrote, when it wrote one. */
+  readonly todos?: readonly TodoItem[]
+  readonly sources?: readonly WebSource[]
+  /** Memory candidates this message proposed. */
+  readonly proposed?: readonly CandidateId[]
+  /** Saved Memories this message was given as context or looked up. */
+  readonly recalled?: readonly MemoryId[]
+  /** Earlier chats this message found, with their current titles; deleted chats are left out. */
+  readonly referenced?: readonly ChatReference[]
+  /** Work sessions this message read, with their titles at the time. */
+  readonly work?: readonly WorkReference[]
+}
+/** A Work session a reply read. */
+export interface WorkReference {
+  readonly sessionId: WorkSessionRef
+  readonly title: string
+}
+/** An earlier chat a reply found by searching. */
+export interface ChatReference {
+  readonly conversationId: ConversationId
+  readonly title: string
 }
 export interface ArtifactVersion {
   readonly rootId: string
@@ -89,12 +160,26 @@ export interface ChatAttachment {
   readonly bytes: number
   readonly image: boolean
 }
+/** A GitHub action the reply waits on until the person allows or declines it. */
+export interface PendingAction {
+  readonly id: string
+  /** The tool's own name, such as `merge_pull_request`. */
+  readonly tool: string
+  readonly risk: 'low' | 'high'
+  /** The repository, with the issue or pull request number when the call names one. */
+  readonly target?: string
+  /** The arguments as they will be sent, as indented JSON, shortened past a few thousand characters. */
+  readonly details: string
+}
 export interface LiveTurn {
   readonly id: string
   readonly branchId: BranchId
   readonly text: string
   readonly reasoning: string
   readonly tool?: string
+  readonly approval?: PendingAction
+  /** How long the current model step had run when this view was built; the client counts on from its own clock. */
+  readonly stepElapsedMs: number
 }
 export interface ConversationDetail {
   readonly conversation: Conversation
@@ -104,7 +189,6 @@ export interface ConversationDetail {
   readonly live?: LiveTurn
   readonly model?: ModelRef
   readonly error?: string
-  readonly omittedMessages: number
 }
 export type ChatUpdate = { readonly kind: 'snapshot'; readonly detail: ConversationDetail }
   | { readonly kind: 'delta'; readonly turnId: string; readonly text: string; readonly reasoning: boolean }
@@ -144,6 +228,8 @@ export interface PersonalProfile {
   readonly source?: ProfileImportSource
   readonly instructions: string
   readonly autoSaveLowRisk: boolean
+  /** Whether the model may search earlier chats while replying, and whether the Memory Summary is kept and used. */
+  readonly referenceChats: boolean
   readonly updatedAt: number
 }
 export type MemorySource =
@@ -175,7 +261,25 @@ export interface MemoryCandidate {
   readonly memoryId?: MemoryId
   readonly replaces?: MemoryId
 }
-export interface MemoryState { readonly profile: PersonalProfile; readonly memories: readonly Memory[]; readonly candidates: readonly MemoryCandidate[] }
+/** The Memory Summary as the memory page shows it. */
+export interface MemorySummaryView {
+  readonly revision: number
+  /** Markdown: an overview paragraph, then `## ` sections. Empty until the first update writes it. */
+  readonly text: string
+  /** Questions the person could ask next, written with the text. */
+  readonly suggestions: readonly string[]
+  /** When the text last changed; 0 before the first change. */
+  readonly updatedAt: number
+  readonly updating: boolean
+  /** Why the last update failed, as an error code; cleared by the next success. */
+  readonly error?: string
+  /** The route that writes the summary; absent means the route of the last message sent. */
+  readonly model?: ModelRef
+  /** Whether sensitive topics may be written into the summary. */
+  readonly sensitive: boolean
+  readonly canUndo: boolean
+}
+export interface MemoryState { readonly profile: PersonalProfile; readonly memories: readonly Memory[]; readonly candidates: readonly MemoryCandidate[]; readonly summary: MemorySummaryView }
 export interface CandidateInput {
   readonly conversationId?: ConversationId
   readonly text: string
@@ -192,6 +296,7 @@ export interface BranchRequest {
   readonly text?: string
   readonly model?: ModelRef
   readonly web?: boolean
+  readonly github?: boolean
 }
 export interface AttachmentText {
   readonly name: string
@@ -203,22 +308,79 @@ export interface AttachmentText {
   readonly pagesRead?: number
 }
 /** All calls use the authenticated owner Remote namespace `personalChat`. */
-export interface UploadLimits { readonly uploadBytes: number; readonly attachmentBytes: number; readonly profileBytes: number }
+export interface UploadLimits { readonly uploadBytes: number; readonly attachmentBytes: number; readonly profileBytes: number
+  /** Bounds the browser applies before reading an export; the Host enforces them again. */
+  readonly archiveBytes: number
+  readonly zipEntries: number
+  /** Whether the Office extension can render files here. */
+  readonly office: boolean
+}
+/** Which GitHub actions that change something run without asking: none, the low-risk ones, or all. */
+export type ApprovalLevel = 'ask' | 'low' | 'all'
+/** Web search and connected apps as the Apps page shows them; never a token. */
+export interface AppsView {
+  /** Web search and page reading through the Harness web provider; `auto` lets the model use them unasked. */
+  readonly web: { readonly available: boolean; readonly auto: boolean }
+  readonly github: {
+    /** Whether the optional GitHub extension is installed and enabled. */
+    readonly installed: boolean
+    /** The signed-in account; absent until a token is stored. */
+    readonly account?: string
+    /** Where the stored token came from. */
+    readonly source?: 'token' | 'gh-cli'
+    readonly auto: boolean
+    readonly approval: ApprovalLevel
+  }
+  /** Where Chat and Work reach each other; each crossing starts off. */
+  readonly work: {
+    /** Whether this Harness runs Work agents that can be offered a tool. */
+    readonly memoryAvailable: boolean
+    /** Whether this Harness can read Work sessions. */
+    readonly recordsAvailable: boolean
+    /** Top-level Work agents may look up Saved Memories and the Memory Summary. */
+    readonly memory: boolean
+    /** Chat may read Work sessions of the allowed workspaces. */
+    readonly records: boolean
+    /** Every Work workspace; `allowed` ones are those Chat may read. */
+    readonly workspaces: readonly WorkspaceView[]
+  }
+}
+/** A Work workspace as the Apps page and the hand-off show it. */
+export interface WorkspaceView {
+  readonly id: WorkspaceRef
+  readonly title: string
+  readonly path: string
+  readonly allowed: boolean
+}
+/** Settings the Apps page changes; absent fields stay as they are. */
+export interface AppsChange {
+  readonly webAuto?: boolean
+  readonly githubAuto?: boolean
+  readonly githubApproval?: ApprovalLevel
+  readonly workMemory?: boolean
+  readonly workRecords?: boolean
+  /** The workspaces Chat may read; it replaces the earlier list. */
+  readonly workWorkspaces?: readonly WorkspaceRef[]
+}
 export interface PersonalChatOperations {
   limits(): Promise<UploadLimits>
   models(): Promise<readonly ModelChoice[]>
-  send(request: { readonly conversationId: ConversationId; readonly requestId: string; readonly branchId?: BranchId; readonly archive?: ArchiveSelection; readonly text: string; readonly attachmentIds?: readonly string[]; readonly model: ModelRef; readonly web?: boolean }): Promise<ConversationDetail>
+  send(request: { readonly conversationId: ConversationId; readonly requestId: string; readonly branchId?: BranchId; readonly archive?: ArchiveSelection; readonly text: string; readonly attachmentIds?: readonly string[]; readonly model: ModelRef; readonly web?: boolean; readonly github?: boolean }): Promise<ConversationDetail>
   stop(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail>
   removeAttachment(request: { readonly conversationId: ConversationId; readonly attachmentId: string }): Promise<void>
   upload(request: { readonly conversationId: ConversationId; readonly name: string; readonly base64: string }): Promise<ChatAttachment>
+  previewFile(request: { readonly conversationId: ConversationId; readonly attachmentId: string; readonly sheet?: string }): Promise<OfficePreview>
+  exportPdf(request: { readonly conversationId: ConversationId; readonly attachmentId: string }): Promise<{ readonly name: string; readonly base64: string }>
   attachment(request: { readonly conversationId: ConversationId; readonly attachmentId: string; readonly original?: boolean }): Promise<{ readonly name: string; readonly mediaType: string; readonly base64: string }>
   follow(signal: AbortSignal): AsyncIterable<PersonalChange>
   followConversation(request: { readonly conversationId: ConversationId }, signal: AbortSignal): AsyncIterable<ChatUpdate>
+  /** @param request - `archived: true` lists only archived chats; otherwise unarchived chats, plus archived ones a non-empty `query` matches. */
   list(request: { readonly query?: string; readonly archived?: boolean }): Promise<readonly ConversationSummary[]>
   create(request: { readonly temporary: boolean }): Promise<ConversationDetail>
   get(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail>
   rename(request: { readonly conversationId: ConversationId; readonly title: string }): Promise<Conversation>
   setArchived(request: { readonly conversationId: ConversationId; readonly archived: boolean }): Promise<Conversation>
+  setPinned(request: { readonly conversationId: ConversationId; readonly pinned: boolean }): Promise<Conversation>
   deleteConversation(request: { readonly conversationId: ConversationId }): Promise<void>
   closeTemporary(request: { readonly conversationId: ConversationId }): Promise<void>
   selectBranch(request: { readonly conversationId: ConversationId; readonly branchId: BranchId }): Promise<ConversationDetail>
@@ -231,11 +393,32 @@ export interface PersonalChatOperations {
   listImports(): Promise<readonly ImportBatch[]>
   undoImport(request: { readonly batchId: ImportBatchId }): Promise<ImportUndoResult>
   memoryState(request: { readonly conversationId?: ConversationId }): Promise<MemoryState>
-  updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile>
+  updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly referenceChats: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile>
   proposeMemory(request: CandidateInput): Promise<MemoryCandidate>
   decideCandidate(request: { readonly conversationId?: ConversationId; readonly candidateId: CandidateId; readonly expectedRevision: number; readonly decision: 'confirm' | 'reject' }): Promise<MemoryCandidate>
   editMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number; readonly text: string }): Promise<Memory>
   forgetMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number }): Promise<Memory>
+  /** Start folding chats the summary does not reflect yet into it; returns once it has started. */
+  refreshSummary(request: { readonly conversationId?: ConversationId }): Promise<MemorySummaryView>
+  /** Answer a question about the summary, or apply a correction the person typed. */
+  askSummary(request: { readonly conversationId?: ConversationId; readonly text: string }): Promise<{ readonly reply: string; readonly summary: MemorySummaryView }>
+  /** Replace the summary with text the person typed, saved as written apart from removed credentials and contact details. */
+  editSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly text: string }): Promise<MemorySummaryView>
+  /** Put back the version before the latest change. */
+  undoSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number }): Promise<MemorySummaryView>
+  /** Empty the summary; chats it already reflected are not read again. */
+  clearSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number }): Promise<MemorySummaryView>
+  /** @param request - `model` absent follows the route of the last message sent. */
+  summaryOptions(request: { readonly conversationId?: ConversationId; readonly model?: ModelRef; readonly sensitive: boolean }): Promise<MemorySummaryView>
+  apps(): Promise<AppsView>
+  updateApps(request: AppsChange): Promise<AppsView>
+  /** Check a token with GitHub, then keep it in the Harness credential store: a pasted one, or this computer's GitHub CLI sign-in. */
+  connectGitHub(request: { readonly token?: string; readonly cli?: boolean }): Promise<AppsView>
+  disconnectGitHub(): Promise<AppsView>
+  /** Answer the action a running reply waits on. */
+  decideAction(request: { readonly conversationId: ConversationId; readonly actionId: string; readonly allow: boolean }): Promise<ConversationDetail>
+  /** Write a task brief from the chat, for the person to send to a new Work session. */
+  handOff(request: { readonly conversationId: ConversationId }): Promise<{ readonly brief: string }>
 }
 
 declare module '@deepseek-ai/dsh-typert-protocol' {

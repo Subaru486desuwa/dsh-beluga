@@ -6,7 +6,7 @@ Personal Chat for DeepSeek Harness, named after one of the most vocal whales.
 
 One plugin adds personal Chat beside Harness Work: conversations, ChatGPT history import, a reviewed personal profile, and controlled memory. Work keeps its own sessions and tools; Chat needs no repository.
 
-The base plugin provides Chat and Memory. Office is a recommended but separately downloaded extension, `dsh-beluga-office`, installed only after explicit user consent. The base package does not depend on Office or ship its processing libraries. Neither models nor uploads can install extensions.
+The base plugin provides Chat and Memory. Office is a recommended but separately downloaded extension, `dsh-beluga-office`, installed only after explicit user consent. GitHub is another optional extension, `dsh-beluga-github`. The base package depends on neither and ships none of their libraries. Neither models nor uploads can install extensions.
 
 ## Build from source
 
@@ -33,30 +33,48 @@ dsh plugin --profile web add ./dsh-beluga-0.1.0.tgz
 dsh --profile web
 ```
 
-Open **Chat** in the Harness sidebar. Choose a configured model and start a conversation. The **Work** button returns to the existing Work view without changing its selected session. The bundle adds only its own loader row; it does not replace official plugins or patch Harness.
+Open **Chat** in the Harness sidebar and start a conversation. The chat's title sits at the top left: after the first reply, the model writes a short title from the first exchange, once; a chat you renamed keeps your name, and earlier chats keep theirs (`autoTitles` turns this off). The button at the right of the message box names the model and reasoning effort: open it to drag the effort slider, or pick the model name to switch models. While Chat is open, the sidebar lists your chats where the workspace browser usually is: pinned chats first, then the rest by date, or by what needs you (running, waiting for you, new reply) from the sort menu. A spinner marks a reply in progress, a ring a chat waiting for you (an action to approve or a memory to review), and a dot a reply that finished while the chat was not open. Search finds archived chats too and tags them. **Settings** at the foot of the list opens one dialog with General, Personalization, Apps and Data controls. The **Work** row above Chat returns to the Work view without changing its selected session; the New Session button at the top still starts a Work session. The bundle adds only its own loader row; it does not replace official plugins or patch Harness.
 
 ## Conversations and files
 
 - Stream replies, stop generation, copy messages, edit a user message or regenerate an answer. Old branches remain selectable.
-- Search titles and message bodies; rename, archive/restore, or delete a Chat and its owned attachments.
+- Long chats keep their whole history in view. When a chat outgrows what one model request carries (`maxContextBytes`, 512 KiB by default, less for a model with a smaller context window), older tool results are left out first, then the model condenses the oldest turns in the background so later replies still know them.
+- Search titles and message bodies; rename, archive, or delete a Chat and its owned attachments. Archiving only hides a chat from the list: search still finds it, the model can still search it, and it still feeds the memory summary. Deleting is how Beluga forgets a chat. Archived chats are opened, unarchived or deleted in **Settings → Data controls**.
+- Pin a Chat to the top of the list, or export it as Markdown. Tool output and reasoning stay out of the export.
+- Replies list their sources beneath them: web pages, the saved memories they used, earlier chats they found, which open on a click, and Work sessions they read, which open in Work. The memory summary and custom instructions go with every reply and are not listed. Read aloud uses only voices on your device; without one it says so rather than sending text to a speech service.
 - Upload text documents, extractable-text PDFs, and supported images. Scanned PDFs need OCR outside this plugin. Images require the explicit inline route below.
-- Web access is off by default. Turn it on for a request to use an existing Harness web provider; Chat never receives shell, arbitrary filesystem or deployment tools.
+- When Harness has a web provider, the model searches the web when a question needs it. Turn that off in **Settings → Apps**; then only a message sent with **Web search** picked from the + menu searches. Chat never receives shell, arbitrary filesystem or deployment tools.
 
 ## Import ChatGPT history
 
-Open **Import** → select an official export ZIP or `conversations.json` → review counts and warnings → **Import**.
+Open **Settings → Data controls → Import ChatGPT** → select an official export ZIP or conversation JSON → review counts and warnings → **Import**.
 
-The importer retains the original JSON, unknown fields, roles, timestamps, `mapping` graph and `current_node`. Select any branch to inspect it. Media references remain in the original archive; export media binaries are not imported or downloaded automatically. Repeated imports are skipped, changed conversations create revisions, and batch undo removes only that batch's archives. Later Chat continuations survive undo.
+A ZIP can be far larger than the upload limit. The browser reads only its conversation JSON, either one `conversations.json` or numbered `conversations-000.json` files, and uploads that. Media stays on your device.
+
+The importer retains the original JSON, unknown fields, roles, timestamps, `mapping` graph and `current_node`. Select any branch to inspect it. Voice messages are read from their transcriptions. Media references remain in the original archive; export media binaries are not imported or downloaded automatically. Reasoning steps stay in the original archive too, but are left out of the history view, Markdown export and model context. Repeated imports are skipped, changed conversations create revisions, and batch undo removes only that batch's archives. Later Chat continuations survive undo.
 
 Continue directly below an imported branch. The model receives a bounded, explicitly untrusted snapshot of that selected branch, not forged native Work logs. Omitted nodes are reported; the complete original archive stays available for viewing.
 
-Defaults: 64 MiB upload, 256 MiB extracted conversation JSON, 10,000 conversations, 500,000 total mapping nodes and 512 MiB stored archives. An unsupported or malformed record rejects the preview instead of silently dropping it. Real official-export compatibility is a separate acceptance step when the user's requested export arrives; current fixtures are synthetic.
+Defaults: 64 MiB upload (for a ZIP, once media is left out), 256 MiB extracted conversation JSON, 10,000 conversations, 500,000 total mapping nodes and 512 MiB stored archives. An unsupported or malformed record rejects the preview instead of silently dropping it. Checked against one real official export from November 2026; repository fixtures stay synthetic. Other exports may differ.
 
-## Profile and memory
+## Personalization and memory
 
-**Memory** contains your background, personal instructions, confirmed facts and review queue. The profile is included independently of keyword recall. Only narrowly recognized, source-grounded low-risk preferences can save automatically; sensitive, inferred and conflicting proposals require confirmation. New automatic memories offer undo. Correcting a fact supersedes it; forgetting suppresses automatic relearning of its text or old evidence.
+**Settings → Personalization** holds your custom instructions (about you, and how to respond), the memory switches, the memory summary, and saved memories with their review queue. Each switch saves as soon as it changes. Custom instructions are included independently of keyword recall. Only narrowly recognized, source-grounded low-risk preferences can save automatically; sensitive, inferred and conflicting proposals require confirmation. A memory a reply proposes appears under that reply: undo one saved automatically, or save or dismiss one awaiting review; until then the chat shows as waiting for you in the list. A memory another chat saves automatically gets a notice with undo. Correcting a fact supersedes it; forgetting suppresses automatic relearning of its text or old evidence.
+
+The **memory summary** is an overview of you that the model writes from your normal chats once they are idle, at most every six hours; later normal chats use it as background. Temporary Chat and imported history never feed it. It records only what you said or confirmed: drafts, translations or role-play you asked for, text you pasted and hypotheticals are not taken as your views. An update changes only the sections it needs to and leaves the others exactly as they were. Choose **Edit** in its menu to change the text yourself or paste a summary you already have. It is saved as typed, without a model, except that credentials, long numbers and email addresses are removed. **Restore previous version** undoes the latest change.
 
 Saved-memory text/JSON and instruction Markdown can be reviewed here. Importing `AGENTS.md` requires personal-scope review; it never edits the source file or Work rules. Do not import credentials. A conversation export does not automatically reconstruct ChatGPT's separate saved-memory store.
+
+While replying, the model can search your earlier chats and quote excerpts, which go to the selected model provider. Turn this off in Personalization. Temporary Chat and imported originals are not searched, while archived chats are; imported history reaches a model only when you continue it. Forgetting a memory does not delete the chat it came from, so the model may still find it there; delete that chat if needed.
+
+## Work crossings
+
+Chat and Work read nothing of each other until you turn a crossing on. **Settings → Apps → Work** has a switch for each:
+
+- **Let Work look up personal memory** gives the main agent of each Work session a read-only tool, `personal_memory_lookup`, that returns your saved memories and memory summary, filtered by words if it asks. It never returns your custom instructions or "about you". Calls from subagents or PTC code are refused. Each call and its result is logged in the Work session like any tool call.
+- **Read Work records in Chat** lets the chat model find Work sessions you started in the workspaces you tick, by time and words, and read what you and the agent said; tool calls, reasoning and notices Harness added are left out. One search reads at most the 50 newest sessions (`maxWorkSessions`) and needs no full-text session search in Harness. A reply lists the Work sessions it read beneath it; a click opens one in Work. What it reads is tool output: once a reply has read Work, it proposes nothing to memory, and the memory summary skips what the assistant said after it.
+
+**Hand off to Work**, in a chat's menu (in the header of a Temporary Chat), asks you for a workspace, then has the model write a task brief from the chat, without memory or custom instructions, and puts it in a new Work session's message box there for you to check and send. A draft already in that box is kept, with the brief added after it. Chat never starts or sends a Work session itself.
 
 ## Temporary Chat
 
@@ -82,7 +100,9 @@ Select the model labeled **Inline images**. This route uses the provider API, no
 
 ## Data and removal
 
-Owned data lives under `$DSH_HOME/personal-chat`: a private SQLite database and attachments. Back up that directory while the profile is stopped. Deleting a chat removes its history/files but retains separately confirmed memories; forget those in Memory. Uninstalling the package does not delete personal data:
+Owned data lives under `$DSH_HOME/personal-chat`: a private SQLite database and attachments. Back up that directory while the profile is stopped. Deleting a chat removes its history/files but retains separately confirmed memories; forget those in **Settings → Personalization**. Uninstalling the package does not delete personal data:
+
+A newer version upgrades the database in place on first start; older versions then refuse it, so back up first.
 
 ```sh
 dsh plugin --profile web remove dsh-beluga
@@ -92,6 +112,24 @@ Use a distinct `dataDir` for each concurrently running profile; the writer lease
 
 ## Office candidate
 
-After explicit installation of the Office extension, DOCX, XLSX and PPTX support structured source reading. Word generation creates editable headings, paragraphs and tables; subsequent block edits preserve previous artifact versions. Editing uploaded templates, Excel/PPT authoring and in-chat Office previews are not yet available.
+After explicit installation of the Office extension:
 
-Install the Office tarball into the existing Chat profile only after the user agrees: `dsh plugin --profile web add ./dsh-beluga-office-0.1.0.tgz`, then restart that profile. Removing `dsh-beluga-office` disables processing while retaining chats, memory and existing artifact downloads. Neither package is published to the public market yet.
+- **Reading:** DOCX, XLSX and PPTX as source records, and any range of a worksheet, with formulas listed apart from their saved results.
+- **Preview and PDF:** Office files render on this machine with the LibreOffice engine that ships with Harness. The layout can differ slightly from Word or Excel.
+- **Word:** create documents with lists, tables, charts, a table of contents, page numbers and Chinese fonts; change paragraphs of any DOCX, uploads included, with optional tracked changes; fill `{{name}}` templates.
+- **Excel:** create workbooks; change cells of any XLSX, uploads included, leaving everything else as it was. Add native column, bar, line and pie charts to either; they read their cells, so they follow the data. Formulas are recalculated and errors such as `#REF!` come back to the model. New sheets print one page wide.
+- **PowerPoint:** create 16:9 decks from slides in eight fixed layouts: title, section, bullets, two columns, native chart, table, key figures and image. The engine places and sizes everything, shrinks text to fit, and reports what still does not fit. Images come only from PNG or JPEG files attached to the chat. Speaker notes are kept.
+
+Every change makes a new version and keeps the original. Chat does not run code, and formulas that fetch from the network or start programs are refused. Temporary Chat keeps files in memory, so it has no preview, PDF export, recalculation or layout check. Changing an existing PPTX is not available yet.
+
+Install the Office tarball into the existing Chat profile only after the user agrees: `dsh plugin --profile web add ./dsh-beluga-office-0.1.0.tgz`, then restart that profile. It uses the engine already installed with Harness, so nothing large is downloaded. Removing `dsh-beluga-office` disables processing while retaining chats, memory and existing artifact downloads.
+
+## GitHub app
+
+After installing the GitHub extension, open **Settings → Apps** in Chat and connect an account with this computer's GitHub CLI sign-in or a pasted fine-grained token. Beluga checks the token with GitHub, then keeps it in the Harness credential store only, never in its own database or a view.
+
+- **Work in GitHub from a chat:** triage pull requests and issues, read files and reviews, look into Actions runs and their logs, comment, open branches and pull requests, and merge. The tools come from GitHub's official MCP server. Creating, forking or deleting whole repositories is left out.
+- **On demand:** the model uses GitHub when a message needs it, or pick **GitHub** from the + menu for one message. Turn automatic use off in Apps.
+- **Changes wait for you by default:** a card shows the action and what will be sent, with **Allow** and **Decline**. Apps can let low-risk actions (comments, issues, branches and pull requests) or all actions run at once. Reads never ask, and Stop ends a wait without running the action.
+
+What GitHub returns goes to the selected model provider, like any tool result. Install with `dsh plugin --profile web add ./dsh-beluga-github-0.1.0.tgz`, then restart the profile. Disconnect before `dsh plugin --profile web remove dsh-beluga-github` to delete the token as well; chats stay. None of the packages is published to the public market yet.

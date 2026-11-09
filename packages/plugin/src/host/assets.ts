@@ -1,12 +1,13 @@
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import type { ChatAttachment, ConversationId, AttachmentText } from '../shared/types.ts'
+import type { ChatAttachment, ConversationId, AttachmentText, OfficePreview } from '../shared/types.ts'
 import { PersonalChatError } from './archive.ts'
 import { extractPdfText } from './pdf.ts'
 import { officeFormat, officeMediaTypes, type OfficeEngine } from './office-contract.ts'
 import type { Config } from './config.ts'
 import type { InlineImage } from './model-bridge.ts'
+import type { SlideImage } from './presentations.ts'
 
 /** Binary files are owned by plugin conversation ids, never arbitrary host paths. */
 export class AssetRepository {
@@ -55,6 +56,34 @@ export class AssetRepository {
     const data = await sharp(source, { limitInputPixels: 16_777_216, animated: false }).rotate().resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true }).removeAlpha().toColourspace('srgb').jpeg({ quality: 90 }).toBuffer()
     signal.throwIfAborted()
     return { mediaType: 'image/jpeg', base64: data.toString('base64') }
+  }
+  /** A PNG or JPEG as a slide shows it: turned upright, at most 2400 pixels a side, in its own format so transparency stays. */
+  async picture(attachment: ChatAttachment, temporary: boolean, signal: AbortSignal): Promise<SlideImage> {
+    signal.throwIfAborted()
+    const source = await this.read(attachment, temporary)
+    const png = attachment.mediaType === 'image/png'
+    const image = sharp(source, { limitInputPixels: 16_777_216, animated: false }).rotate().resize({ width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true })
+    const { data, info } = await (png ? image.png() : image.jpeg({ quality: 90 })).toBuffer({ resolveWithObject: true })
+    signal.throwIfAborted()
+    return { data: new Uint8Array(data), mediaType: png ? 'image/png' : 'image/jpeg', width: info.width, height: info.height }
+  }
+  /** The engine for a saved Office file. Temporary Chat stays in memory, and rendering needs files on disk. */
+  private renderer(attachment: ChatAttachment, temporary: boolean): OfficeEngine {
+    if (temporary) throw new PersonalChatError('temporary-operation', 'Temporary Chat keeps files in memory, so it has no preview or PDF export')
+    const office = this.office()
+    if (!office) throw new PersonalChatError('office-not-installed', 'Install and enable the optional Office extension explicitly first')
+    if (!officeFormat(attachment.name)) throw new PersonalChatError('attachment-format', 'Only DOCX, XLSX and PPTX files can be rendered')
+    return office
+  }
+  async preview(attachment: ChatAttachment, temporary: boolean, sheet: string | undefined, signal: AbortSignal): Promise<OfficePreview> {
+    const office = this.renderer(attachment, temporary)
+    return office.previewFile(await this.read(attachment, false), attachment.name, sheet, this.config.maxAttachmentBytes, signal)
+  }
+  async pdf(attachment: ChatAttachment, temporary: boolean, signal: AbortSignal): Promise<Uint8Array> {
+    const office = this.renderer(attachment, temporary)
+    const pdf = await office.exportPdf(await this.read(attachment, false), attachment.name, signal)
+    if (pdf.length > this.config.maxAttachmentBytes) throw new PersonalChatError('attachment-limit', 'The exported PDF exceeds the file limit')
+    return pdf
   }
   async text(attachment: ChatAttachment, temporary: boolean, offset: number, signal: AbortSignal): Promise<AttachmentText & { nextOffset?: number; totalCharacters: number }> {
     signal.throwIfAborted()

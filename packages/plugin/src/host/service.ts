@@ -10,15 +10,26 @@ import { Config } from './config.ts'
 import { Conversations, type RunningTurn } from './conversations.ts'
 import { Imports } from './imports.ts'
 import { PersonalMemory } from './personal-memory.ts'
+import { MemorySummaries, SUMMARY_CHECK_MS } from './memory-summary.ts'
+import { Condenser } from './condense.ts'
+import { Titles } from './titles.ts'
+import { HandOff } from './handoff.ts'
+import { offerMemoryLookup } from './work-memory.ts'
 import { PersonalStore } from './storage.ts'
 import { textOf, type ChatEntry, type ConversationRecord } from './records.ts'
 import { Turns } from './turns.ts'
+import { Apps } from './apps.ts'
 import { AssetRepository } from './assets.ts'
 import { decodeBase64 } from './base64.ts'
 import { ModelBridge } from './model-bridge.ts'
-import type { ModelChoice, ModelRef } from '../shared/models.ts'
-import type { ArchiveRevisionId, ArchiveSelection, BranchId, BranchRequest, CandidateId, CandidateInput, ChatBranch, Conversation, ConversationDetail, ConversationId, ConversationSummary, ImportBatch, ImportBatchId, ImportPreview, ImportPreviewId, ImportResult, ImportUndoResult, Memory, MemoryCandidate, MemoryId, MemoryState, PersonalChatOperations, PersonalProfile, ProfileImportSource, ChatAttachment, ChatUpdate, PersonalChange } from '../shared/types.ts'
+import { routeKey, sameRoute, type ModelChoice, type ModelRef } from '../shared/models.ts'
+import type { AppsChange, AppsView, ArchiveRevisionId, ArchiveSelection, BranchId, BranchRequest, CandidateId, CandidateInput, ChatBranch, Conversation, ConversationDetail, ConversationId, ConversationSummary, OfficePreview, UploadLimits, ImportBatch, ImportBatchId, ImportPreview, ImportPreviewId, ImportResult, ImportUndoResult, Memory, MemoryCandidate, MemoryId, MemoryState, MemorySummaryView, PersonalChatOperations, PersonalProfile, ProfileImportSource, ChatAttachment, ChatUpdate, PersonalChange, WorkspaceRef } from '../shared/types.ts'
 export type * from '../shared/types.ts'
+
+/** The kit gives up at 60 s per operation; this also covers the wait for a turn behind it. */
+const RENDER_TIMEOUT_MS = 180000
+/** Checking a token is one GitHub sign-in and one call. */
+const CONNECT_TIMEOUT_MS = 30000
 export type * from '../shared/models.ts'
 export { Config } from './config.ts'
 
@@ -34,8 +45,12 @@ export class PersonalChatService extends TypertRemoteService implements Personal
   private readonly assets: AssetRepository
   private chats!: Conversations
   private memory!: PersonalMemory
+  private summaries!: MemorySummaries
   private imports!: Imports
   private turns!: Turns
+  /** Web search, connected apps and Work crossings; the Remote method `apps` reports them. */
+  private integrations!: Apps
+  private handOffs!: HandOff
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'personalChat', { namespace: 'personalChat' })
@@ -47,8 +62,16 @@ export class PersonalChatService extends TypertRemoteService implements Personal
   protected async [Service.init](): Promise<void> {
     const chats = this.chats = new Conversations(this.config, await PersonalStore.open(this.config.dataDir))
     this.memory = new PersonalMemory(chats, this.config)
+    const summaries = this.summaries = new MemorySummaries(chats, this.bridge, this.config)
     this.imports = new Imports(chats, this.config)
-    this.turns = new Turns(this.ctx, chats, this.memory, this.assets, this.bridge, this.config)
+    const apps = this.integrations = new Apps(this.ctx, chats.domain, this.config)
+    const condenser = new Condenser(chats, this.bridge, this.config, message => this.ctx.logger.warn(message))
+    const titles = new Titles(chats, this.bridge, this.config, message => this.ctx.logger.warn(message))
+    const handOffs = this.handOffs = new HandOff(chats, this.bridge, this.config)
+    this.turns = new Turns(this.ctx, chats, this.memory, summaries, this.assets, this.bridge, apps, condenser, titles, apps.work, this.config)
+    // Work agents exist only where the profile runs them; the tool follows those services and the setting (ADR 0006).
+    const memory = this.memory
+    this.ctx.inject(['tools', 'agents'], scope => { offerMemoryLookup(scope, { saved: query => memory.saved(query), summary: () => summaries.current() }, this.config.maxWorkBytes, () => apps.settings().workMemory, listener => apps.watch(listener)) })
     this.ctx.effect(() => async () => {
       await chats.drain()
       this.imports.clear()
@@ -69,30 +92,58 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     }, Math.min(60000, this.config.temporaryIdleMs))
     interval.unref()
     this.ctx.effect(() => () => clearInterval(interval))
+    const summaryCheck = setInterval(() => { summaries.tick() }, SUMMARY_CHECK_MS)
+    summaryCheck.unref()
+    this.ctx.effect(() => () => { clearInterval(summaryCheck); summaries.dispose(); condenser.dispose(); titles.dispose(); handOffs.dispose() })
   }
   private owner(): void {
     if (this.chats.closing) throw new PersonalChatError('unavailable', 'Personal Chat is shutting down')
     if (principalOf(this.ctx.invocation) !== undefined) throw new RemoteError('personal-chat/forbidden', 'Personal Chat is restricted to the Host owner', {})
   }
   /** Effective upload limits, without provider configuration or credentials. */
-  @Remote async limits(): Promise<{ readonly uploadBytes: number; readonly attachmentBytes: number; readonly profileBytes: number }> { this.owner(); return { uploadBytes: this.config.maxUploadBytes, attachmentBytes: this.config.maxAttachmentBytes, profileBytes: this.config.maxProfileBytes } }
-  /** Configured Harness models, plus any explicitly configured inline image models. */
-  @Remote async models(): Promise<readonly ModelChoice[]> { this.owner(); return this.bridge.models() }
-  /** List plugin histories only. Temporary conversations are never added to history. */
+  @Remote async limits(): Promise<UploadLimits> { this.owner(); return { office: !!this.ctx.get('personalChatOffice'), uploadBytes: this.config.maxUploadBytes, archiveBytes: this.config.maxArchiveBytes, zipEntries: this.config.maxZipEntries, attachmentBytes: this.config.maxAttachmentBytes, profileBytes: this.config.maxProfileBytes } }
+  /** Configured Harness models, plus any explicitly configured inline image models, each with the effort last sent with it. */
+  @Remote async models(): Promise<readonly ModelChoice[]> {
+    this.owner()
+    const { last, efforts } = this.chats.domain.preferences.get()
+    return (await this.bridge.models()).map(choice => {
+      const effort = efforts[routeKey(choice)]
+      return { ...choice, ...(effort !== undefined && choice.efforts?.some(item => item.id === effort) ? { effort } : {}), ...(last && sameRoute(last, choice) ? { lastUsed: true as const } : {}) }
+    })
+  }
+  /**
+   * List plugin histories only. Temporary conversations are never added to history.
+   * @param request - `archived: true` lists only archived chats; otherwise unarchived chats, plus archived ones a non-empty `query` matches.
+   * @returns matching summaries, pinned ones first, then newest first.
+   */
   @Remote async list(request: { readonly query?: string; readonly archived?: boolean }): Promise<readonly ConversationSummary[]> {
     this.owner()
-    return this.chats.domain.catalog({ query: request.query ?? '', archived: request.archived ?? false })
+    const marks = this.chats.marks()
+    return (await this.chats.domain.catalog({ query: request.query ?? '', archived: request.archived ?? false })).map(item => ({ ...item, activity: this.chats.activity(item.id, marks) }))
   }
   /** Create a plugin conversation with immutable retention and no Work side effects. */
   @Remote async create(request: { readonly temporary: boolean }): Promise<ConversationDetail> {
     this.owner()
     return this.chats.serial(async () => {
+      await this.discardDrafts()
       const now = Date.now()
       const branch: ChatBranch = { id: uuid<BranchId>(), messageIds: [], createdAt: now }
       const conversation: Conversation = { id: uuid<ConversationId>(), title: '', temporary: request.temporary, archived: false, createdAt: now, updatedAt: now, branches: [branch], selectedBranchId: branch.id, archiveRevisions: [], archiveWithdrawn: false }
       await this.chats.saveConversation(conversation)
       return this.chats.detail(conversation)
     })
+  }
+  /**
+   * A chat is saved on creation so files can be attached before the first message, but only
+   * listed once it holds one. Remove the ones left before sending, with their files, unless a
+   * page still shows them.
+   */
+  private async discardDrafts(): Promise<void> {
+    for (const id of this.chats.domain.drafts()) {
+      const record = this.chats.raw(id)
+      if (!record || record.entries.length || record.conversation.archiveRevisions.length || record.conversation.branches.some(branch => branch.archive) || this.chats.running.has(id) || this.chats.listening(id)) continue
+      await this.cleanupConversation(id, record)
+    }
   }
   /** Read the selected source branch and plugin-owned messages. */
   @Remote async get(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail> { this.owner(); return this.chats.detail(this.chats.find(request.conversationId)) }
@@ -101,7 +152,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     this.owner()
     const title = request.title.trim()
     if (!title || Buffer.byteLength(title) > 500) throw new PersonalChatError('invalid-title', 'Title must be 1–500 UTF-8 bytes')
-    return this.chats.serial(async () => { const current = this.chats.find(request.conversationId); const changed = { ...current, title, updatedAt: Date.now() }; await this.chats.saveConversation(changed); return changed })
+    return this.chats.serial(async () => { const current = this.chats.find(request.conversationId); const changed = { ...current, title, titleSource: 'renamed' as const, updatedAt: Date.now() }; await this.chats.saveConversation(changed); return changed })
   }
   /** Archive is reversible and is distinct from deletion. */
   @Remote async setArchived(request: { readonly conversationId: ConversationId; readonly archived: boolean }): Promise<Conversation> {
@@ -111,6 +162,17 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       const current = this.chats.find(request.conversationId)
       if (current.temporary) throw new PersonalChatError('temporary-operation', 'Temporary Chat cannot be archived')
       const value = { ...current, archived: request.archived, updatedAt: Date.now() }
+      await this.chats.saveConversation(value)
+      return value
+    })
+  }
+  /** Pinning reorders the history without counting as activity. */
+  @Remote async setPinned(request: { readonly conversationId: ConversationId; readonly pinned: boolean }): Promise<Conversation> {
+    this.owner()
+    return this.chats.serial(async () => {
+      const { pinned: _old, ...current } = this.chats.find(request.conversationId)
+      if (current.temporary) throw new PersonalChatError('temporary-operation', 'Temporary Chat cannot be pinned')
+      const value = { ...current, ...(request.pinned ? { pinned: true } : {}) }
       await this.chats.saveConversation(value)
       return value
     })
@@ -171,7 +233,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       if (prior) {
         if (prior.parentBranchId !== request.branchId || prior.sourceMessageId !== request.messageId || prior.operation !== request.action) throw new PersonalChatError('request-conflict', 'This request id was already used for another operation')
         const admitted = record.entries.find(entry => entry.originBranchId === prior.id && entry.message.role === 'user')
-        if ((request.action === 'edit' && admitted?.userText !== request.text?.trim()) || (request.model && admitted?.admissionModel && !sameModel(request.model, admitted.admissionModel)) || (admitted && !!admitted.admissionWeb !== !!request.web)) throw new PersonalChatError('request-conflict', 'This branch request id has a different payload')
+        if ((request.action === 'edit' && admitted?.userText !== request.text?.trim()) || (request.model && admitted?.admissionModel && !sameModel(request.model, admitted.admissionModel)) || (admitted && (!!admitted.admissionWeb !== !!request.web || !!admitted.admissionGitHub !== !!request.github))) throw new PersonalChatError('request-conflict', 'This branch request id has a different payload')
         return this.chats.detail({ ...current, selectedBranchId: prior.id })
       }
       this.chats.idle(request.conversationId)
@@ -195,7 +257,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
         const model = request.model ?? record.model
         if (!model) throw new PersonalChatError('model-unavailable', 'Select a model before generating')
         await this.requireModel(model)
-        run = await this.turns.admit(updated, branch, request.action === 'edit' ? request.text ?? '' : input.userText ?? textOf(input.message), input.attachmentIds, model, request.web === true)
+        run = await this.turns.admit(updated, branch, request.action === 'edit' ? request.text ?? '' : input.userText ?? textOf(input.message), input.attachmentIds, model, { web: request.web === true, github: request.github === true })
       } else await this.chats.saveRecord(updated)
       return this.chats.detail(this.chats.find(current.id))
     })
@@ -203,7 +265,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
     return result
   }
   /** Start a response after durable input admission, or entirely in memory for Temporary Chat. */
-  @Remote async send(request: { readonly conversationId: ConversationId; readonly requestId: string; readonly branchId?: BranchId; readonly archive?: ArchiveSelection; readonly text: string; readonly attachmentIds?: readonly string[]; readonly model: ModelRef; readonly web?: boolean }): Promise<ConversationDetail> {
+  @Remote async send(request: { readonly conversationId: ConversationId; readonly requestId: string; readonly branchId?: BranchId; readonly archive?: ArchiveSelection; readonly text: string; readonly attachmentIds?: readonly string[]; readonly model: ModelRef; readonly web?: boolean; readonly github?: boolean }): Promise<ConversationDetail> {
     this.owner()
     this.requestId(request.requestId)
     let run: RunningTurn | undefined
@@ -213,7 +275,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       let conversation = this.chats.find(request.conversationId)
       const prior = record.entries.find(entry => entry.id === request.requestId)
       if (prior) {
-        if (prior.message.role !== 'user' || prior.userText !== request.text.trim() || JSON.stringify(prior.attachmentIds) !== JSON.stringify(request.attachmentIds ?? []) || (!prior.admissionModel || !sameModel(prior.admissionModel, request.model)) || !!prior.admissionWeb !== !!request.web) throw new PersonalChatError('request-conflict', 'This request id was already used for another message')
+        if (prior.message.role !== 'user' || prior.userText !== request.text.trim() || JSON.stringify(prior.attachmentIds) !== JSON.stringify(request.attachmentIds ?? []) || (!prior.admissionModel || !sameModel(prior.admissionModel, request.model)) || !!prior.admissionWeb !== !!request.web || !!prior.admissionGitHub !== !!request.github) throw new PersonalChatError('request-conflict', 'This request id was already used for another message')
         const originalBranch = conversation.branches.find(branch => branch.id === prior.originBranchId)
         if ((request.branchId && request.branchId !== prior.originBranchId) || (request.archive && (originalBranch?.archive?.revisionId !== request.archive.revisionId || originalBranch.archive.nodeId !== request.archive.nodeId))) throw new PersonalChatError('request-conflict', 'This request id has another branch target')
         duplicate = this.chats.detail({ ...conversation, ...(prior.originBranchId ? { selectedBranchId: prior.originBranchId } : {}) })
@@ -236,7 +298,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       if (conversation.archived) throw new PersonalChatError('archived', 'Restore this conversation before sending')
       if (!conversation.selectedBranchId) { conversation = await this.ensureContinuation(conversation); record = this.chats.record(conversation.id) }
       const branch = conversation.branches.find(item => item.id === conversation.selectedBranchId)!
-      run = await this.turns.admit(record, branch, request.text, request.attachmentIds ?? [], request.model, request.web === true, request.requestId)
+      run = await this.turns.admit(record, branch, request.text, request.attachmentIds ?? [], request.model, { web: request.web === true, github: request.github === true }, request.requestId)
     })
     if (duplicate) return duplicate
     if (run) this.turns.launch(request.conversationId, run)
@@ -244,7 +306,41 @@ export class PersonalChatService extends TypertRemoteService implements Personal
   }
   private async requireModel(model: ModelRef): Promise<void> {
     if (!await this.bridge.available(model)) throw new PersonalChatError('model-unavailable', 'Select an available configured model')
+    if (!await this.bridge.takesEffort(model)) throw new PersonalChatError('effort-unavailable', 'Select a reasoning effort this model offers')
   }
+  /** Allow or decline the GitHub action a reply waits on; the reply goes on either way. */
+  @Remote async decideAction(request: { readonly conversationId: ConversationId; readonly actionId: string; readonly allow: boolean }): Promise<ConversationDetail> {
+    this.owner()
+    const approval = this.chats.running.get(request.conversationId)?.approval
+    if (!approval || approval.action.id !== request.actionId) throw new PersonalChatError('action-unavailable', 'This action is no longer waiting for an answer')
+    approval.decide(request.allow === true)
+    return this.chats.detail(this.chats.find(request.conversationId))
+  }
+  /** Web search, connected apps and Work crossings, with their settings; never a token. */
+  @Remote async apps(): Promise<AppsView> { this.owner(); return this.integrations.view() }
+  @Remote async updateApps(request: AppsChange): Promise<AppsView> {
+    this.owner()
+    const change = z.object({ webAuto: z.boolean().optional(), githubAuto: z.boolean().optional(), githubApproval: z.enum(['ask', 'low', 'all']).optional(), workMemory: z.boolean().optional(), workRecords: z.boolean().optional(), workWorkspaces: z.array(z.string().min(1).max(200).transform(brandString<WorkspaceRef>)).max(500).optional() }).strict().parse(request)
+    await this.chats.serial(() => this.integrations.update(Object.fromEntries(Object.entries(change).filter(([, value]) => value !== undefined))))
+    return this.integrations.view()
+  }
+  /** Check a token with GitHub, then keep it in the Harness credential store; the token never comes back. */
+  @Remote async connectGitHub(request: { readonly token?: string; readonly cli?: boolean }): Promise<AppsView> {
+    this.owner()
+    const github = this.integrations.github()
+    const token = request.token?.trim()
+    if (request.cli === true ? token !== undefined : !token || token.length > 1000 || /\s/u.test(token)) throw new PersonalChatError('invalid-token', 'Paste one GitHub token, or use the GitHub CLI sign-in')
+    await github.connect(request.cli === true ? { cli: true } : { token: token! }, AbortSignal.timeout(CONNECT_TIMEOUT_MS))
+    return this.integrations.view()
+  }
+  /** Write a task brief from the chat; the person sends it to a new Work session themselves. */
+  @Remote async handOff(request: { readonly conversationId: ConversationId }): Promise<{ readonly brief: string }> {
+    this.owner()
+    this.chats.find(request.conversationId)
+    return { brief: await this.handOffs.brief(request.conversationId) }
+  }
+  /** Remove the stored token; GitHub keeps it valid until it is revoked there. */
+  @Remote async disconnectGitHub(): Promise<AppsView> { this.owner(); await this.integrations.github().disconnect(); return this.integrations.view() }
   /** Cancel the provider and in-flight tools, then return the settled prefix. */
   @Remote async stop(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail> {
     this.owner()
@@ -279,6 +375,19 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       return attachment
     })
   }
+  /** Show an owned Office file as images, for the person to read before downloading it. */
+  @Remote async previewFile(request: { readonly conversationId: ConversationId; readonly attachmentId: string; readonly sheet?: string }): Promise<OfficePreview> {
+    this.owner()
+    const record = this.chats.record(request.conversationId)
+    return this.assets.preview(this.chats.ownedAsset(record, request.attachmentId), record.conversation.temporary, request.sheet, AbortSignal.timeout(RENDER_TIMEOUT_MS))
+  }
+  @Remote async exportPdf(request: { readonly conversationId: ConversationId; readonly attachmentId: string }): Promise<{ readonly name: string; readonly base64: string }> {
+    this.owner()
+    const record = this.chats.record(request.conversationId)
+    const attachment = this.chats.ownedAsset(record, request.attachmentId)
+    const pdf = await this.assets.pdf(attachment, record.conversation.temporary, AbortSignal.timeout(RENDER_TIMEOUT_MS))
+    return { name: attachment.name.replace(/\.[^.]+$/u, '') + '.pdf', base64: Buffer.from(pdf).toString('base64') }
+  }
   /** Read an owned attachment for explicit browser preview/download. */
   @Remote async attachment(request: { readonly conversationId: ConversationId; readonly attachmentId: string; readonly original?: boolean }): Promise<{ readonly name: string; readonly mediaType: string; readonly base64: string }> {
     this.owner()
@@ -301,6 +410,7 @@ export class PersonalChatService extends TypertRemoteService implements Personal
       const record = this.chats.raw(request.conversationId)
       return !record || record.deleting || this.chats.deleting.has(request.conversationId) ? { kind: 'closed' } : { kind: 'snapshot', detail: this.chats.detail(this.chats.hydrate(record.conversation)) }
     }
+    if (!this.chats.find(request.conversationId).temporary) await this.chats.markUnseen(request.conversationId, false)
     try { yield* this.chats.feed(request.conversationId).follow(baseline, signal) }
     finally { if (this.chats.temporary.has(request.conversationId)) this.chats.temporarySeen.set(request.conversationId, Date.now()) }
   }
@@ -345,9 +455,9 @@ export class PersonalChatService extends TypertRemoteService implements Personal
   /** Withdraw exactly this batch; plugin continuations and earlier batches survive. */
   @Remote async undoImport(request: { readonly batchId: ImportBatchId }): Promise<ImportUndoResult> { this.owner(); return this.imports.undo(request) }
   /** Read confirmed and pending state; temporary callers are denied before the ledger read. */
-  @Remote async memoryState(request: { readonly conversationId?: ConversationId }): Promise<MemoryState> { this.owner(); return this.memory.state(request) }
+  @Remote async memoryState(request: { readonly conversationId?: ConversationId }): Promise<MemoryState> { this.owner(); return { ...await this.memory.state(request), summary: this.summaries.view() } }
   /** Replace the compact profile and custom instructions with optimistic concurrency. */
-  @Remote async updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile> { this.owner(); return this.memory.updateProfile(request) }
+  @Remote async updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly referenceChats: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile> { this.owner(); return this.memory.updateProfile(request) }
   /** Propose a source-grounded memory; the server decides sensitivity and automatic admission. */
   @Remote async proposeMemory(request: CandidateInput): Promise<MemoryCandidate> { this.owner(); return this.memory.propose(request) }
   /** Confirm the exact pending revision, or reject/undo a candidate and suppress resurrection. */
@@ -356,6 +466,29 @@ export class PersonalChatService extends TypertRemoteService implements Personal
   @Remote async editMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number; readonly text: string }): Promise<Memory> { this.owner(); return this.memory.edit(request) }
   /** Forget removes future recall and suppresses old source evidence from automatic saving. */
   @Remote async forgetMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number }): Promise<Memory> { this.owner(); return this.memory.forget(request) }
+  /** Fold chats the Memory Summary has not read into it; returns once the update is queued. */
+  @Remote async refreshSummary(request: { readonly conversationId?: ConversationId }): Promise<MemorySummaryView> { this.owner(); this.memory.guard(request.conversationId); this.summaries.refresh(); return this.summaries.view() }
+  /** Answer a question about the summary, or apply a correction typed on the memory page. */
+  @Remote async askSummary(request: { readonly conversationId?: ConversationId; readonly text: string }): Promise<{ readonly reply: string; readonly summary: MemorySummaryView }> {
+    this.owner(); this.memory.guard(request.conversationId)
+    const text = z.string().max(this.config.maxSummaryBytes * 2).parse(request.text)
+    return { reply: await this.summaries.ask(text), summary: this.summaries.view() }
+  }
+  /** Save summary text typed on the memory page, without a model. */
+  @Remote async editSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly text: string }): Promise<MemorySummaryView> {
+    this.owner(); this.memory.guard(request.conversationId)
+    const text = z.string().max(this.config.maxSummaryBytes * 2).parse(request.text)
+    await this.summaries.edit(request.expectedRevision, text)
+    return this.summaries.view()
+  }
+  @Remote async undoSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number }): Promise<MemorySummaryView> { this.owner(); this.memory.guard(request.conversationId); await this.summaries.undo(request.expectedRevision); return this.summaries.view() }
+  @Remote async clearSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number }): Promise<MemorySummaryView> { this.owner(); this.memory.guard(request.conversationId); await this.summaries.clear(request.expectedRevision); return this.summaries.view() }
+  @Remote async summaryOptions(request: { readonly conversationId?: ConversationId; readonly model?: ModelRef; readonly sensitive: boolean }): Promise<MemorySummaryView> {
+    this.owner(); this.memory.guard(request.conversationId)
+    const options = z.object({ model: z.object({ provider: z.string().min(1), model: z.string().min(1), inline: z.literal(true).optional(), effort: z.string().optional() }).optional(), sensitive: z.boolean() }).parse({ model: request.model, sensitive: request.sensitive })
+    await this.summaries.options(options.model ? { model: options.model, sensitive: options.sensitive } : { sensitive: options.sensitive })
+    return this.summaries.view()
+  }
 }
-function sameModel(left: ModelRef, right: ModelRef): boolean { return left.provider === right.provider && left.model === right.model && !!left.inline === !!right.inline }
+function sameModel(left: ModelRef, right: ModelRef): boolean { return sameRoute(left, right) && left.effort === right.effort }
 export default PersonalChatService
