@@ -7,29 +7,23 @@ import type { Conversations } from './conversations.ts'
 import type { MemoryLedger } from './records.ts'
 import type { CandidateId, CandidateInput, Conversation, ConversationId, Memory, MemoryCandidate, MemoryId, MemorySource, MemoryState, PersonalProfile, ProfileImportSource } from '../shared/types.ts'
 
-/** The user's profile and confirmed facts. Temporary Chat can neither read nor write them. */
+/** Keeps Custom Instructions, Saved Memories and their candidates. Whether a caller may reach them is Memory Access's answer, asked before calling here. */
 export class PersonalMemory {
   constructor(private readonly chats: Conversations, private readonly config: Config) {}
-  guard(conversationId?: ConversationId): void {
-    if (conversationId !== undefined && this.chats.find(conversationId).temporary) throw new PersonalChatError('memory-forbidden', 'Temporary Chat cannot read or write long-term memory')
-  }
   /** A pending candidate cannot outlive the conversation it came from. */
   async releaseConversation(id: ConversationId): Promise<void> {
     const ledger = this.chats.domain.global.get()
     const candidates = ledger.candidates.filter(candidate => !(candidate.state === 'pending' && candidate.source.kind === 'chat' && candidate.source.conversationId === id))
     if (candidates.length !== ledger.candidates.length) await this.saveLedger({ ...ledger, candidates })
   }
-  async state(request: { readonly conversationId?: ConversationId }): Promise<Omit<MemoryState, 'summary'>> {
-    this.guard(request.conversationId)
+  async state(): Promise<Omit<MemoryState, 'summary'>> {
     const { profile, memories, candidates } = this.chats.domain.global.get()
     const active = memories.filter(memory => memory.state === 'active')
     return { profile, memories: active, candidates: candidates.filter(candidate => candidate.state === 'pending' || (candidate.state === 'saved' && active.some(memory => memory.id === candidate.memoryId))) }
   }
-  async updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly referenceChats: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile> {
-    this.guard(request.conversationId)
+  async updateProfile(request: { readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly referenceChats: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile> {
     if (Buffer.byteLength(request.background) + Buffer.byteLength(request.instructions) > this.config.maxProfileBytes) throw new PersonalChatError('profile-limit', 'Profile and instructions exceed maxProfileBytes')
     return this.chats.serial(async () => {
-      this.guard(request.conversationId)
       const ledger = this.chats.domain.global.get()
       this.revision(ledger.profile.revision, request.expectedRevision)
       const profile: PersonalProfile = { ...(request.source ? { source: request.source } : {}), revision: ledger.profile.revision + 1, background: request.background, instructions: request.instructions, autoSaveLowRisk: request.autoSaveLowRisk, referenceChats: request.referenceChats, updatedAt: Date.now() }
@@ -69,9 +63,7 @@ export class PersonalMemory {
     return entry.userText ?? ''
   }
   async propose(request: CandidateInput): Promise<MemoryCandidate> {
-    this.guard(request.conversationId)
     return this.chats.serial(async () => {
-      this.guard(request.conversationId)
       const conversation = request.conversationId === undefined ? undefined : this.chats.find(request.conversationId)
       const text = this.memoryText(request.text)
       const evidence = await this.evidence(conversation, request.source)
@@ -95,10 +87,8 @@ export class PersonalMemory {
   private newMemory(candidate: MemoryCandidate): Memory {
     return { id: brandString<MemoryId>(randomUUID()), revision: 1, text: candidate.text, category: candidate.category, scope: 'personal', source: candidate.source, createdAt: Date.now(), updatedAt: Date.now(), state: 'active', ...(candidate.replaces ? { supersedes: candidate.replaces } : {}) }
   }
-  async decide(request: { readonly conversationId?: ConversationId; readonly candidateId: CandidateId; readonly expectedRevision: number; readonly decision: 'confirm' | 'reject' }): Promise<MemoryCandidate> {
-    this.guard(request.conversationId)
+  async decide(request: { readonly candidateId: CandidateId; readonly expectedRevision: number; readonly decision: 'confirm' | 'reject' }): Promise<MemoryCandidate> {
     return this.chats.serial(async () => {
-      this.guard(request.conversationId)
       const ledger = this.chats.domain.global.get()
       const candidate = ledger.candidates.find(value => value.id === request.candidateId)
       if (!candidate) throw new PersonalChatError('candidate-not-found', 'Memory candidate is unavailable')
@@ -123,10 +113,8 @@ export class PersonalMemory {
       return updated
     })
   }
-  async edit(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number; readonly text: string }): Promise<Memory> {
-    this.guard(request.conversationId)
+  async edit(request: { readonly memoryId: MemoryId; readonly expectedRevision: number; readonly text: string }): Promise<Memory> {
     return this.chats.serial(async () => {
-      this.guard(request.conversationId)
       const ledger = this.chats.domain.global.get()
       const memory = ledger.memories.find(value => value.id === request.memoryId)
       if (!memory || memory.state !== 'active') throw new PersonalChatError('memory-not-found', 'Active memory is unavailable')
@@ -136,10 +124,8 @@ export class PersonalMemory {
       return replacement
     })
   }
-  async forget(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number }): Promise<Memory> {
-    this.guard(request.conversationId)
+  async forget(request: { readonly memoryId: MemoryId; readonly expectedRevision: number }): Promise<Memory> {
     return this.chats.serial(async () => {
-      this.guard(request.conversationId)
       const ledger = this.chats.domain.global.get()
       const memory = ledger.memories.find(value => value.id === request.memoryId)
       if (!memory) throw new PersonalChatError('memory-not-found', 'Memory is unavailable')
@@ -159,17 +145,16 @@ export class PersonalMemory {
       return updated
     })
   }
-  /**
-   * @param query - the person's message; Saved Memories sharing a word with it come along.
-   * @returns the context text for the model, and the Saved Memories it holds.
-   */
   /** @returns Saved Memories whose text holds `query`, every one for an empty query, oldest first. */
   saved(query: string): Memory[] {
     const needle = normalized(query)
     return this.chats.domain.global.get().memories.filter(memory => memory.state === 'active' && (!needle || normalized(memory.text).includes(needle)))
   }
-  context(conversation: Conversation, query: string): { readonly text: string; readonly recalled: readonly MemoryId[] } {
-    if (conversation.temporary) return { text: '', recalled: [] }
+  /**
+   * @param query - the person's message; Saved Memories sharing a word with it come along.
+   * @returns the context text for the model, and the Saved Memories it holds.
+   */
+  context(query: string): { readonly text: string; readonly recalled: readonly MemoryId[] } {
     const ledger = this.chats.domain.global.get()
     const tokens: string[] = normalized(query).match(/[\p{L}\p{N}]{2,}/gu) ?? []
     for (const phrase of query.match(/[\p{Script=Han}]+/gu) ?? []) for (let i = 0; i + 1 < phrase.length; i++) tokens.push(phrase.slice(i, i + 2))

@@ -9,6 +9,7 @@ import { archiveSnapshot, archiveView, PersonalChatError } from './archive.ts'
 import { Config } from './config.ts'
 import { Conversations, type RunningTurn } from './conversations.ts'
 import { Imports } from './imports.ts'
+import { permit } from './memory-access.ts'
 import { PersonalMemory } from './personal-memory.ts'
 import { MemorySummaries, SUMMARY_CHECK_MS } from './memory-summary.ts'
 import { Condenser } from './condense.ts'
@@ -454,37 +455,44 @@ export class PersonalChatService extends TypertRemoteService implements Personal
   @Remote async listImports(): Promise<readonly ImportBatch[]> { this.owner(); return this.imports.list() }
   /** Withdraw exactly this batch; plugin continuations and earlier batches survive. */
   @Remote async undoImport(request: { readonly batchId: ImportBatchId }): Promise<ImportUndoResult> { this.owner(); return this.imports.undo(request) }
+  /**
+   * Refuses when the person reaches Personal Memory from a chat that Memory Access keeps away from it.
+   * @param conversationId - the chat open in the Client, absent when none is.
+   */
+  private permitSettings(conversationId: ConversationId | undefined): void {
+    if (conversationId !== undefined) permit(this.chats.access(this.chats.find(conversationId), false), 'settings')
+  }
   /** Read confirmed and pending state; temporary callers are denied before the ledger read. */
-  @Remote async memoryState(request: { readonly conversationId?: ConversationId }): Promise<MemoryState> { this.owner(); return { ...await this.memory.state(request), summary: this.summaries.view() } }
+  @Remote async memoryState(request: { readonly conversationId?: ConversationId }): Promise<MemoryState> { this.owner(); this.permitSettings(request.conversationId); return { ...await this.memory.state(), summary: this.summaries.view() } }
   /** Replace the compact profile and custom instructions with optimistic concurrency. */
-  @Remote async updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly referenceChats: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile> { this.owner(); return this.memory.updateProfile(request) }
+  @Remote async updateProfile(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly background: string; readonly instructions: string; readonly autoSaveLowRisk: boolean; readonly referenceChats: boolean; readonly source?: ProfileImportSource }): Promise<PersonalProfile> { this.owner(); this.permitSettings(request.conversationId); return this.memory.updateProfile(request) }
   /** Propose a source-grounded memory; the server decides sensitivity and automatic admission. */
-  @Remote async proposeMemory(request: CandidateInput): Promise<MemoryCandidate> { this.owner(); return this.memory.propose(request) }
+  @Remote async proposeMemory(request: CandidateInput): Promise<MemoryCandidate> { this.owner(); this.permitSettings(request.conversationId); return this.memory.propose(request) }
   /** Confirm the exact pending revision, or reject/undo a candidate and suppress resurrection. */
-  @Remote async decideCandidate(request: { readonly conversationId?: ConversationId; readonly candidateId: CandidateId; readonly expectedRevision: number; readonly decision: 'confirm' | 'reject' }): Promise<MemoryCandidate> { this.owner(); return this.memory.decide(request) }
+  @Remote async decideCandidate(request: { readonly conversationId?: ConversationId; readonly candidateId: CandidateId; readonly expectedRevision: number; readonly decision: 'confirm' | 'reject' }): Promise<MemoryCandidate> { this.owner(); this.permitSettings(request.conversationId); return this.memory.decide(request) }
   /** Human correction creates a new revision and supersedes the previous fact. */
-  @Remote async editMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number; readonly text: string }): Promise<Memory> { this.owner(); return this.memory.edit(request) }
+  @Remote async editMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number; readonly text: string }): Promise<Memory> { this.owner(); this.permitSettings(request.conversationId); return this.memory.edit(request) }
   /** Forget removes future recall and suppresses old source evidence from automatic saving. */
-  @Remote async forgetMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number }): Promise<Memory> { this.owner(); return this.memory.forget(request) }
+  @Remote async forgetMemory(request: { readonly conversationId?: ConversationId; readonly memoryId: MemoryId; readonly expectedRevision: number }): Promise<Memory> { this.owner(); this.permitSettings(request.conversationId); return this.memory.forget(request) }
   /** Fold chats the Memory Summary has not read into it; returns once the update is queued. */
-  @Remote async refreshSummary(request: { readonly conversationId?: ConversationId }): Promise<MemorySummaryView> { this.owner(); this.memory.guard(request.conversationId); this.summaries.refresh(); return this.summaries.view() }
+  @Remote async refreshSummary(request: { readonly conversationId?: ConversationId }): Promise<MemorySummaryView> { this.owner(); this.permitSettings(request.conversationId); this.summaries.refresh(); return this.summaries.view() }
   /** Answer a question about the summary, or apply a correction typed on the memory page. */
   @Remote async askSummary(request: { readonly conversationId?: ConversationId; readonly text: string }): Promise<{ readonly reply: string; readonly summary: MemorySummaryView }> {
-    this.owner(); this.memory.guard(request.conversationId)
+    this.owner(); this.permitSettings(request.conversationId)
     const text = z.string().max(this.config.maxSummaryBytes * 2).parse(request.text)
     return { reply: await this.summaries.ask(text), summary: this.summaries.view() }
   }
   /** Save summary text typed on the memory page, without a model. */
   @Remote async editSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number; readonly text: string }): Promise<MemorySummaryView> {
-    this.owner(); this.memory.guard(request.conversationId)
+    this.owner(); this.permitSettings(request.conversationId)
     const text = z.string().max(this.config.maxSummaryBytes * 2).parse(request.text)
     await this.summaries.edit(request.expectedRevision, text)
     return this.summaries.view()
   }
-  @Remote async undoSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number }): Promise<MemorySummaryView> { this.owner(); this.memory.guard(request.conversationId); await this.summaries.undo(request.expectedRevision); return this.summaries.view() }
-  @Remote async clearSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number }): Promise<MemorySummaryView> { this.owner(); this.memory.guard(request.conversationId); await this.summaries.clear(request.expectedRevision); return this.summaries.view() }
+  @Remote async undoSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number }): Promise<MemorySummaryView> { this.owner(); this.permitSettings(request.conversationId); await this.summaries.undo(request.expectedRevision); return this.summaries.view() }
+  @Remote async clearSummary(request: { readonly conversationId?: ConversationId; readonly expectedRevision: number }): Promise<MemorySummaryView> { this.owner(); this.permitSettings(request.conversationId); await this.summaries.clear(request.expectedRevision); return this.summaries.view() }
   @Remote async summaryOptions(request: { readonly conversationId?: ConversationId; readonly model?: ModelRef; readonly sensitive: boolean }): Promise<MemorySummaryView> {
-    this.owner(); this.memory.guard(request.conversationId)
+    this.owner(); this.permitSettings(request.conversationId)
     const options = z.object({ model: z.object({ provider: z.string().min(1), model: z.string().min(1), inline: z.literal(true).optional(), effort: z.string().optional() }).optional(), sensitive: z.boolean() }).parse({ model: request.model, sensitive: request.sensitive })
     await this.summaries.options(options.model ? { model: options.model, sensitive: options.sensitive } : { sensitive: options.sensitive })
     return this.summaries.view()
