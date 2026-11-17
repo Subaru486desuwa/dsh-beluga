@@ -6,12 +6,13 @@
  * Imported History never feeds it, and Temporary Chat neither reads nor feeds it.
  */
 import { PersonalChatError } from './archive.ts'
+import { memoryAccess } from './memory-access.ts'
 import { textOf, type ConversationRecord, type SummaryRecord } from './records.ts'
 import { sameRoute, type ModelRef } from '../shared/models.ts'
 import type { Config } from './config.ts'
 import type { Conversations } from './conversations.ts'
 import type { ModelBridge } from './model-bridge.ts'
-import type { Conversation, MemorySummaryView } from '../shared/types.ts'
+import type { MemorySummaryView } from '../shared/types.ts'
 
 /** Chats must be quiet this long before an automatic update reads them. */
 export const SUMMARY_IDLE_MS = 30 * 60 * 1000
@@ -77,7 +78,9 @@ export function collectMaterial(records: readonly ConversationRecord[], progress
       const role = entry.message.role
       if (role === 'user') drewOnWork = false
       else if (entry.work?.length) drewOnWork = true
-      const text = role === 'user' ? entry.userText ?? textOf(entry.message) : role === 'assistant' && !drewOnWork ? textOf(entry.message) : ''
+      // The switch is on wherever material is collected; it is checked before an update starts.
+      const feeds = memoryAccess({ temporary: record.conversation.temporary, referenceChats: true, readWork: drewOnWork }).feedSummary === 'allowed'
+      const text = !feeds ? '' : role === 'user' ? entry.userText ?? textOf(entry.message) : role === 'assistant' ? textOf(entry.message) : ''
       if (!kept.has(entry.id) || !text.trim()) continue
       const line = (role === 'user' ? 'User: ' + clip(text.trim(), USER_CHARS) : ASSISTANT_LABEL + clip(text.trim(), ASSISTANT_CHARS)).replace(/\n{3,}/gu, '\n\n')
       if (used + bytes(line) + 1 > limit) break
@@ -218,16 +221,17 @@ export class MemorySummaries {
 
   constructor(private readonly chats: Conversations, private readonly bridge: ModelBridge, private readonly config: Config) {}
   private get record(): SummaryRecord { return this.chats.domain.summary.get() }
-  private enabled(): boolean { return this.chats.domain.global.get().profile.referenceChats }
+  /** Whether the summary is kept. The chats it reads are stored ones, which are never Temporary Chats. */
+  private enabled(): boolean { return memoryAccess({ temporary: false, referenceChats: this.chats.domain.global.get().profile.referenceChats, readWork: false }).feedSummary === 'allowed' }
   view(): MemorySummaryView {
     const record = this.record
     return { revision: record.revision, text: record.text, suggestions: record.suggestions, updatedAt: record.updatedAt, updating: this.update !== undefined, ...(record.error ? { error: record.error } : {}), ...(record.model ? { model: record.model } : {}), sensitive: record.sensitive, canUndo: record.history.length > 0 }
   }
   /** @returns the summary text, empty when the summary is off or unwritten. */
   current(): string { return this.enabled() ? this.record.text : '' }
-  /** Background for one normal chat's model request; empty when the summary is off or unwritten. */
-  context(conversation: Conversation): string {
-    const text = conversation.temporary ? '' : this.current()
+  /** Background for a model request that Memory Access lets carry the summary; empty while unwritten. */
+  context(): string {
+    const text = this.record.text
     return text && 'Memory summary, written from earlier chats and possibly out of date:\n' + text
   }
   /** Stop a running model request when the service stops. */

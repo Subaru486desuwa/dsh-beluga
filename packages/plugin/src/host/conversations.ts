@@ -2,6 +2,7 @@ import { archiveView, parseConversation, PersonalChatError, type ParsedArchive }
 import { Feed } from './feed.ts'
 import { Lru } from './lru.ts'
 import { proposingChats } from './memory.ts'
+import { memoryAccess, type MemoryAccess } from './memory-access.ts'
 import { textOf, type ConversationRecord, type ToolNotes } from './records.ts'
 import { todosOf } from './todos.ts'
 import type { Config } from './config.ts'
@@ -127,6 +128,15 @@ export class Conversations {
     this.changes.publish({ kind: 'catalog' })
   }
   raw(id: ConversationId): ConversationRecord | undefined { return this.temporary.get(id) ?? this.domain.conversation(id) }
+  /**
+   * @param conversation - the chat asked about.
+   * @param readWork - whether the reply asked about has read Work; false where no reply is involved.
+   * @returns Memory Access as the person's switch stands now.
+   */
+  access(conversation: Conversation, readWork: boolean): MemoryAccess {
+    // A Temporary Chat is refused whatever the switch says, so the memory ledger is not read for it.
+    return memoryAccess({ temporary: conversation.temporary, referenceChats: conversation.temporary || this.domain.global.get().profile.referenceChats, readWork })
+  }
   record(id: ConversationId): ConversationRecord {
     const record = this.raw(id)
     if (!record || record.deleting || this.deleting.has(id)) throw new PersonalChatError('not-found', 'Conversation is unavailable')
