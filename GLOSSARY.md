@@ -13,7 +13,7 @@ _Avoid_: session、会话（那是 Work 的）
 _Avoid_: 新请求、request、response
 
 **Temporary Chat（临时聊天）**:
-只存在于内存里的 Chat，不读也不写任何个人记忆，离开即消失。
+只存在于内存里的 Chat，不读也不写任何个人记忆，离开即消失。它不属于任何 Project。
 _Avoid_: 无痕模式、incognito
 
 **Archived Chat（已归档的聊天）**:
@@ -47,7 +47,7 @@ _Avoid_: citations、引用、参考资料
 _Avoid_: workspace、文件夹、folder
 
 **Memory Scope（记忆范围）**:
-一个 Project 选定的记忆边界：默认，或仅限项目。仅限项目时，项目内外的 Chat 与个人记忆互不读取，项目里的 Chat 也不写进 Memory Summary；Custom Instructions 照常适用。
+一个 Project 选定的记忆边界：默认，或仅限项目。仅限项目时，项目内外的 Chat 与个人记忆互不读取，项目里的 Chat 不提出新的 Saved Memory，也不写进 Memory Summary；Custom Instructions 照常适用。它可以随时更改，从更改时起按新的选择生效，已经写进 Memory Summary 的内容不会因此收回。
 _Avoid_: project-only memory、隔离、沙箱
 
 ## 模型
@@ -65,6 +65,14 @@ _Avoid_: image route、图片模型
 _Avoid_: thinking level、推理强度、effort mode
 
 ## 记忆
+
+**Personal Memory（个人记忆）**:
+Custom Instructions、Saved Memory 和 Memory Summary 三者的总称。过去的 Chat 不算在内。
+_Avoid_: 长期记忆、单说“记忆”
+
+**Memory Access（记忆访问）**:
+一个 Turn 能读写哪些 Personal Memory、能否引用过去的 Chat。它由四件事决定：是不是 Temporary Chat、所在 Project 的 Memory Scope、用户在设置里的开关，以及这条回复是否读过 Work。几件事同时成立时取最严的。
+_Avoid_: 记忆权限、记忆范围（那是 Memory Scope）
 
 **Memory Summary（记忆摘要）**:
 Beluga 从用户自己的非临时聊天里提炼出的、关于用户的长期概述，按主题分节，并在聊天空闲后自动更新。它只记录用户自己说出或明确确认的内容；用户让助手写的稿件、粘贴的资料和假设都不算用户的观点。之后的普通聊天都会把它当作背景。它一开始是空白；Imported History、临时聊天、仅限项目的 Project 和 Work 都不会写进去。用户可以在设置里直接编辑它、询问它，或恢复上一版。
