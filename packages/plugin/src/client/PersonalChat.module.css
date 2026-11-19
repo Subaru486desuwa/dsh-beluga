@@ -72,6 +72,7 @@
 .menuModel small { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 16px; }
 .iconAction { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
 .iconAction:disabled { opacity: .4; cursor: default; }
+.iconAction[aria-pressed='true'] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .pane { --chat-column: 768px; position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .pane[data-landing] { justify-content: center; padding-bottom: 10vh; }
 .landing { padding: 0 24px 28px; text-align: center; }
@@ -284,7 +285,6 @@
 .navFoot { border-top: .5px solid var(--dsw-alias-border-l3); padding-top: 8px; }
 .navAction, .navRow { display: flex; align-items: center; gap: 8px; box-sizing: border-box; width: 100%; min-height: 36px; border: 0; border-radius: var(--dsw-radius-md); padding: 0 10px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .navAction:disabled, .navRow:disabled { cursor: default; }
-.navActionGap { flex: none; width: 18px; }
 .navSearch { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
 .navSearch .search { margin-top: 0; padding: 8px 10px; }
 .navIcon { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 36px; height: 36px; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; cursor: pointer; }

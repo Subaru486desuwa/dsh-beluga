@@ -10,7 +10,7 @@ The base plugin provides Chat and Memory. Office is a recommended but separately
 
 ## Install the built plugin
 
-Target: **unmodified DeepSeek Harness 0.2.1-rc.3**, Node **24.9+**. This is a pre-release candidate; it has not been published to npm or a public market.
+Target: **unmodified DeepSeek Harness 0.2.1-rc.3 or a later 0.2 release** (`engines.dsh` is `>=0.2.1-rc.3 <0.3.0`; checked on 0.2.1-rc.3 and a 0.2.2-alpha.2 build), Node **24.9+**. This is a pre-release candidate; it has not been published to npm or a public market.
 
 Install a built release tarball into your chosen **web** profile, then restart that profile:
 
@@ -19,7 +19,9 @@ dsh plugin --profile web add ./dsh-beluga-0.1.0.tgz
 dsh --profile web
 ```
 
-Open **Chat** in the Harness sidebar. Choose a configured model and start a conversation. The **Work** button returns to the existing Work view without changing its selected session. The bundle adds only its own loader row; it does not replace official plugins or patch Harness.
+Harness opens on **Chat**, listed above **Work** in the sidebar. Choose a configured model and start a conversation. The **Work** row returns to the existing Work view without changing its selected session. The bundle adds only its own loader row; it does not replace official plugins or change Harness files.
+
+The sidebar keeps the mode you are in, Chat or Work, while you open Plugins or another Harness page. In Chat mode the top button, Ctrl/Cmd+N, the macOS title-bar button and the brand all start a new chat; in Work mode they start a Work session as usual. Harness 0.2.1-rc.3 has no such seat: its top button keeps the New Session label, and Beluga answers its call with a new chat while Chat's page is open, so the Chat list no longer repeats New chat; on other pages it starts a Work session. To open on Work instead, set `startMode: work` under the `personal-chat` entry's `config` in the profile's patch; any other value fails when the plugin loads.
 
 ## Conversations and files
 
@@ -60,7 +62,7 @@ Chat and Work read nothing of each other until a switch under **Settings → App
 
 ## Temporary Chat
 
-Temporary Chat keeps its messages and attachments in RAM and does not read or write the profile or long-term memory. It has no history entry or persisted browser draft. Leaving the view closes it; an unobserved disconnected temporary chat expires after the configured idle interval (default 60 seconds). Restarting the host loses it.
+Turn it on with the dashed bubble at the top right of an empty new chat; until the first message or file, the same button turns it off again and keeps what you typed. Temporary Chat keeps its messages and attachments in RAM and does not read or write the profile or long-term memory. It has no history entry or persisted browser draft. Leaving the view closes it; an unobserved disconnected temporary chat expires after the configured idle interval (default 60 seconds). Restarting the host loses it.
 
 The selected model provider still receives the request and applies its own retention policy. Other user-installed Harness observers or operating-system dumps are outside the plugin's storage boundary. The plugin calls text routes without a Work `sessionId` and avoids the stock durable image-upload pipeline.
 

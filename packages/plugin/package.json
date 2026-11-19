@@ -7,7 +7,7 @@
   "types": "lib/types/index.d.ts",
   "engines": {
     "node": ">=24.9.0",
-    "dsh": "0.2.1-rc.3"
+    "dsh": ">=0.2.1-rc.3 <0.3.0"
   },
   "license": "MIT",
   "repository": {
@@ -100,10 +100,10 @@
     "zod": "4.4.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/dsh-credentials": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.3",
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/dsh-credentials": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-typert-protocol": ">=0.2.1-rc.3 <0.3.0",
     "react": "^18.2.0"
   },
   "devDependencies": {

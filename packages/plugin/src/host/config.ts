@@ -1,6 +1,7 @@
 import z from '@deepseek-ai/schemastery'
 import type { ArchiveLimits } from './archive.ts'
 import type { InlineProvider } from '../shared/models.ts'
+import type { StartMode } from '../shared/types.ts'
 
 export interface Config extends ArchiveLimits {
   dataDir: string
@@ -18,6 +19,7 @@ export interface Config extends ArchiveLimits {
   previewTtlMs: number
   temporaryIdleMs: number
   autoTitles: boolean
+  startMode: StartMode
   maxWorkBytes: number
   maxWorkSessions: number
   inlineProvider?: InlineProvider
@@ -43,6 +45,7 @@ export const Config: z<Config> = z.object({
   previewTtlMs: z.natural().min(1).default(15 * 60 * 1000),
   temporaryIdleMs: z.natural().min(1000).default(60 * 1000),
   autoTitles: z.boolean().default(true).description('After the first reply, the chat model writes a short title from the first exchange, unless the person renamed the chat'),
+  startMode: z.union(['chat', 'work'] as const).default('chat').description('The Mode each launch opens in: Chat\'s page, or Work\'s Conversation view'),
   maxWorkBytes: z.natural().min(1024).default(24000).description('Bytes one Memory Lookup or Work Records result may carry'),
   maxWorkSessions: z.natural().min(1).default(50).description('Most recent Work sessions one Work Records search reads'),
   inlineProvider: z.union([z.const(undefined), z.object({

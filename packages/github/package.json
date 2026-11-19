@@ -17,7 +17,7 @@
   },
   "engines": {
     "node": ">=24.9.0",
-    "dsh": "0.2.1-rc.3"
+    "dsh": ">=0.2.1-rc.3 <0.3.0"
   },
   "files": [
     "lib/index.js",
@@ -37,8 +37,8 @@
     "@modelcontextprotocol/client": "2.2.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/dsh-credentials": "0.2.1-rc.3",
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/dsh-credentials": ">=0.2.1-rc.3 <0.3.0",
     "dsh-beluga": "0.1.0"
   },
   "devDependencies": {

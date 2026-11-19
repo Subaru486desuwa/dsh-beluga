@@ -24,7 +24,7 @@ The tarballs are written to `dist/`. Use those paths in the commands below.
 
 ## Install the built plugin
 
-Target: **unmodified DeepSeek Harness 0.2.1-rc.3**, Node **24.9+**. This is a pre-release candidate; it has not been published to npm or a public market.
+Target: **unmodified DeepSeek Harness 0.2.1-rc.3 or a later 0.2 release** (`engines.dsh` is `>=0.2.1-rc.3 <0.3.0`; checked on 0.2.1-rc.3 and a 0.2.2-alpha.2 build), Node **24.9+**. This is a pre-release candidate; it has not been published to npm or a public market.
 
 Install a built release tarball into your chosen **web** profile, then restart that profile:
 
@@ -33,7 +33,7 @@ dsh plugin --profile web add ./dsh-beluga-0.1.0.tgz
 dsh --profile web
 ```
 
-Open **Chat** in the Harness sidebar and start a conversation. The chat's title sits at the top left: after the first reply, the model writes a short title from the first exchange, once; a chat you renamed keeps your name, and earlier chats keep theirs (`autoTitles` turns this off). The button at the right of the message box names the model and reasoning effort: open it to drag the effort slider, or pick the model name to switch models. While Chat is open, the sidebar lists your chats where the workspace browser usually is: pinned chats first, then the rest by date, or by what needs you (running, waiting for you, new reply) from the sort menu. A spinner marks a reply in progress, a ring a chat waiting for you (an action to approve or a memory to review), and a dot a reply that finished while the chat was not open. Search finds archived chats too and tags them. **Settings** at the foot of the list opens one dialog with General, Personalization, Apps and Data controls. The **Work** row above Chat returns to the Work view without changing its selected session; the New Session button at the top still starts a Work session. The bundle adds only its own loader row; it does not replace official plugins or patch Harness.
+Open **Chat** in the Harness sidebar and start a conversation. The chat's title sits at the top left: after the first reply, the model writes a short title from the first exchange, once; a chat you renamed keeps your name, and earlier chats keep theirs (`autoTitles` turns this off). The button at the right of the message box names the model and reasoning effort: open it to drag the effort slider, or pick the model name to switch models. While you are in Chat, the sidebar lists your chats where the workspace browser usually is: pinned chats first, then the rest by date, or by what needs you (running, waiting for you, new reply) from the sort menu. A spinner marks a reply in progress, a ring a chat waiting for you (an action to approve or a memory to review), and a dot a reply that finished while the chat was not open. Search finds archived chats too and tags them. **Settings** at the foot of the list opens one dialog with General, Personalization, Apps and Data controls. Harness opens on Chat, and the **Work** row below it returns to the Work view without changing its selected session; `startMode: work` in the plugin's config opens on Work instead. Plugins and other Harness pages keep the mode you are in. On a Harness that provides the sidebar primary action, New chat takes the place of New Session at the top, on Ctrl/Cmd+N, on the macOS title-bar button and on the brand while you are in Chat, and leaves the list; on 0.2.1-rc.3 the top button keeps its New Session label, but while Chat's page is open it, Ctrl/Cmd+N, the macOS title-bar button and the brand start a new chat, and the list no longer repeats New chat; on other pages they start a Work session. To keep a chat out of your history, turn on **Temporary chat** with the dashed bubble at the top right of an empty new chat. The bundle adds only its own loader row; it does not replace official plugins or change Harness files. On 0.2.1-rc.3 it answers New Session's call while Chat's page is open (ADR 0005).
 
 ## Conversations and files
 
@@ -78,7 +78,7 @@ Chat and Work read nothing of each other until you turn a crossing on. **Setting
 
 ## Temporary Chat
 
-Temporary Chat keeps its messages and attachments in RAM and does not read or write the profile or long-term memory. It has no history entry or persisted browser draft. Leaving the view closes it; an unobserved disconnected temporary chat expires after the configured idle interval (default 60 seconds). Restarting the host loses it.
+Turn it on with the dashed bubble at the top right of an empty new chat; until the first message or file, the same button turns it off again and keeps what you typed. Temporary Chat keeps its messages and attachments in RAM and does not read or write the profile or long-term memory. It has no history entry or persisted browser draft. Leaving the view closes it; an unobserved disconnected temporary chat expires after the configured idle interval (default 60 seconds). Restarting the host loses it.
 
 The selected model provider still receives the request and applies its own retention policy. Other user-installed Harness observers or operating-system dumps are outside the plugin's storage boundary. The plugin calls text routes without a Work `sessionId` and avoids the stock durable image-upload pipeline.
 

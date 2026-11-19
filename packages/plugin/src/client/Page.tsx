@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, IconEllipsisOutlineRegular, IconQueueOutlineRegular, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AppsView, ConversationDetail, WorkspaceRef } from '../shared/types.ts'
-import type { PersonalCommands, PersonalPageProps } from './contract.ts'
+import type { PersonalCommands, PersonalPageProps, PrimaryActionIconProps } from './contract.ts'
 import type { PersonalState } from './model.ts'
 import { ArchiveHistory } from './Archive.tsx'
 import { ChatMessages } from './Chat.tsx'
@@ -15,6 +15,14 @@ type T = TranslateNS<'personalChat'>
 
 /** Sidebar-owned global navigation glyph. @param props - Sidebar icon dimensions. @returns the existing chat/history glyph. */
 export function PersonalPanelIcon({ size }: PropsRuntime<'sidebar.panellist'>) { return <IconQueueOutlineRegular size={size} /> }
+/** Chat's glyph on the sidebar primary action. @param props - Glyph edge in pixels. @returns the Chat glyph. */
+export function NewChatIcon({ size }: PrimaryActionIconProps) { return <IconQueueOutlineRegular size={size} /> }
+/** A dashed speech bubble: a chat that leaves no history. */
+function TemporaryIcon() {
+  return <svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeDasharray="2.6 2.4" aria-hidden>
+    <path d="M10 3.5c3.9 0 7 2.6 7 5.9s-3.1 5.9-7 5.9c-.9 0-1.8-.1-2.6-.4L4 16.3l.9-3.2C3.7 12.1 3 10.8 3 9.4c0-3.3 3.1-5.9 7-5.9Z" />
+  </svg>
+}
 
 /** A chat that holds an image can only go on with a route that reads images. */
 function holdsImages(detail: ConversationDetail | undefined): boolean {
@@ -95,6 +103,9 @@ export function PersonalPage({ usePersonal, commands, useStore, t }: PersonalPag
     <main className={css.detail}>
       <header className={css.detailHead}>
         <h2>{temporary || (!conversation && state.draftTemporary) ? t('temporary') : conversation?.title || t('newChat')}</h2>
+        {conversation === undefined && <div className={css.headerActions}>
+          <button type="button" className={css.iconAction} aria-label={t('temporary')} title={t('temporary')} aria-pressed={state.draftTemporary} disabled={state.busy} onClick={() => { void commands.setTemporary(!state.draftTemporary) }}><TemporaryIcon /></button>
+        </div>}
         {conversation !== undefined && <div className={css.headerActions}>
           {temporary ? <><Button size="sm" variant="outline" disabled={state.busy || !detail?.messages.length} onClick={startHandOff}>{t('handOff')}</Button><Button size="sm" disabled={state.busy} onClick={() => { void commands.close() }}>{t('closeTemporary')}</Button></> : <Menu open={menuOpen} onClose={() => { setMenuOpen(false) }} portal align="end" autoFocus anchor={<button type="button" className={css.iconAction} aria-label={t('more')} aria-haspopup="menu" aria-expanded={menuOpen} disabled={state.busy} onClick={() => { setMenuOpen(value => !value) }}><IconEllipsisOutlineRegular size={20} /></button>} items={[
             { id: 'rename', label: t('rename') },

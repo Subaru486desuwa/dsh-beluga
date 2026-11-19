@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { ChatNavigation } from '../src/client/Navigation.tsx'
+import { whileValue } from '../src/client/panels.ts'
 import type { NavigationProps, PersonalCommands } from '../src/client/contract.ts'
 import type { PersonalState } from '../src/client/model.ts'
 import type { ChatActivity, ConversationId, ConversationSummary } from '../src/shared/types.ts'
@@ -14,7 +15,7 @@ function show(results: readonly ConversationSummary[], extra: Partial<Navigation
   const commands = { create: vi.fn(async () => true), open: vi.fn(async () => true), search: vi.fn(), openSettings: vi.fn(async () => true), retry: vi.fn() } as unknown as PersonalCommands
   const state = { busy: false, status: 'ready', results, query: '', ...more } as unknown as PersonalState
   const setOrder = vi.fn()
-  const props = { wide: true, expandSidebar: vi.fn(), usePersonal: (select: (value: PersonalState) => unknown) => select(state), commands, useStore: (select: (value: { order: 'time' | 'activity' }) => unknown) => select({ order: 'time' }), setOrder, t, ...extra } as unknown as NavigationProps
+  const props = { wide: true, expandSidebar: vi.fn(), usePersonal: (select: (value: PersonalState) => unknown) => select(state), commands, useStore: (select: (value: { order: 'time' | 'activity' }) => unknown) => select({ order: 'time' }), useSeated: (select: (value: boolean) => unknown) => select(false), setOrder, t, ...extra } as unknown as NavigationProps
   render(<ChatNavigation {...props} />)
   return { commands, setOrder, props }
 }
@@ -63,5 +64,42 @@ describe('Chat sidebar region', () => {
     expect(expandSidebar).toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'newChat' }))
     expect(commands.create).toHaveBeenCalledWith(false)
+  })
+  it('leaves New chat to the button at the top while it carries New chat, and lists no Temporary chat entry', () => {
+    show([chat('One')])
+    expect(screen.queryByRole('button', { name: 'temporary' })).toBeNull()
+    cleanup()
+    show([chat('One')], { useSeated: (select: (value: boolean) => unknown) => select(true) } as Partial<NavigationProps>)
+    expect(screen.queryByRole('button', { name: 'newChat' })).toBeNull()
+    expect(screen.getByRole('searchbox', { name: 'search' })).toBeTruthy()
+    cleanup()
+    show([chat('One')], { wide: false, useSeated: (select: (value: boolean) => unknown) => select(true) } as Partial<NavigationProps>)
+    expect(screen.queryByRole('button', { name: 'newChat' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'search' })).toBeTruthy()
+  })
+})
+
+describe('contributions that follow a value', () => {
+  it('holds one registration while the value matches and gives it up when it changes', () => {
+    let active: string | null = null
+    const listeners = new Set<() => void>()
+    const mode = { getSnapshot: () => active, subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } } }
+    const select = (id: string | null) => { active = id; for (const listener of listeners) listener() }
+    const disposed = vi.fn()
+    const left = vi.fn()
+    const register = vi.fn(() => disposed)
+    const stop = whileValue(mode, 'chat', register, left)
+    expect(register).not.toHaveBeenCalled()
+    select('chat')
+    select('chat')
+    expect(register).toHaveBeenCalledOnce()
+    select('work')
+    expect(disposed).toHaveBeenCalledOnce()
+    expect(left).toHaveBeenCalledOnce()
+    select('chat')
+    stop()
+    expect(register).toHaveBeenCalledTimes(2)
+    expect(disposed).toHaveBeenCalledTimes(2)
+    expect(listeners.size).toBe(0)
   })
 })

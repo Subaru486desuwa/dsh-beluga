@@ -24,7 +24,7 @@ import { AssetRepository } from './assets.ts'
 import { decodeBase64 } from './base64.ts'
 import { ModelBridge } from './model-bridge.ts'
 import { routeKey, sameRoute, type ModelChoice, type ModelRef } from '../shared/models.ts'
-import type { AppsChange, AppsView, ArchiveRevisionId, ArchiveSelection, BranchId, BranchRequest, CandidateId, CandidateInput, ChatBranch, Conversation, ConversationDetail, ConversationId, ConversationSummary, OfficePreview, UploadLimits, ImportBatch, ImportBatchId, ImportPreview, ImportPreviewId, ImportResult, ImportUndoResult, Memory, MemoryCandidate, MemoryId, MemoryState, MemorySummaryView, PersonalChatOperations, PersonalProfile, ProfileImportSource, ChatAttachment, ChatUpdate, PersonalChange, WorkspaceRef } from '../shared/types.ts'
+import type { AppsChange, AppsView, ArchiveRevisionId, ArchiveSelection, BranchId, BranchRequest, CandidateId, CandidateInput, ChatBranch, Conversation, ConversationDetail, ConversationId, ConversationSummary, OfficePreview, StartMode, UploadLimits, ImportBatch, ImportBatchId, ImportPreview, ImportPreviewId, ImportResult, ImportUndoResult, Memory, MemoryCandidate, MemoryId, MemoryState, MemorySummaryView, PersonalChatOperations, PersonalProfile, ProfileImportSource, ChatAttachment, ChatUpdate, PersonalChange, WorkspaceRef } from '../shared/types.ts'
 export type * from '../shared/types.ts'
 
 /** The kit gives up at 60 s per operation; this also covers the wait for a turn behind it. */
@@ -103,6 +103,8 @@ export class PersonalChatService extends TypertRemoteService implements Personal
   }
   /** Effective upload limits, without provider configuration or credentials. */
   @Remote async limits(): Promise<UploadLimits> { this.owner(); return { office: !!this.ctx.get('personalChatOffice'), uploadBytes: this.config.maxUploadBytes, archiveBytes: this.config.maxArchiveBytes, zipEntries: this.config.maxZipEntries, attachmentBytes: this.config.maxAttachmentBytes, profileBytes: this.config.maxProfileBytes } }
+  /** The configured Mode a launch opens in. */
+  @Remote async startMode(): Promise<StartMode> { this.owner(); return this.config.startMode }
   /** Configured Harness models, plus any explicitly configured inline image models, each with the effort last sent with it. */
   @Remote async models(): Promise<readonly ModelChoice[]> {
     this.owner()

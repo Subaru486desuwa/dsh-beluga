@@ -130,6 +130,10 @@ _Avoid_: 用来指 Chat
 Work 的一个项目目录记录，连同在其中运行过的 Session。它只属于 Work，Project 不绑定它。
 _Avoid_: 项目（那是 Project）
 
+**Mode（模式）**:
+侧栏此刻服务的是 Chat 还是 Work，它决定侧栏的新建操作和导航区。选中 Chat 进入 Chat 模式，回到 Work（Work 行或任一 Session）进入 Work 模式，打开其他页面时模式不变。每次启动都从配置的启动模式开始，不沿用上次的模式。
+_Avoid_: 页面、面板（插件页等其他页面不是模式）
+
 **Memory Lookup（记忆查询）**:
 用户打开后，顶层 Work Session 的模型在任务需要时只读地查询 Saved Memory 和 Memory Summary 的能力，默认关闭；子 agent 和生成的代码不能使用。Custom Instructions 不经由它进入 Work。
 _Avoid_: 记忆同步、共享记忆

@@ -1,3 +1,4 @@
+import type { ComponentType } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime, PropsStore, HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AppsChange, ArchiveSelection, BranchId, ConversationId, ImportBatchId, Memory, MemorySource, MemoryCandidate, OfficePreview, PersonalProfile, ChatAttachment, WorkSessionRef, WorkspaceRef } from '../shared/types.ts'
 import type { ModelRef } from '../shared/models.ts'
@@ -8,6 +9,8 @@ import type { PersonalChatKey } from './locales.ts'
 
 export interface PersonalCommands {
   create(temporary: boolean): Promise<boolean>
+  /** Turn Temporary Chat on or off for the empty chat on screen; the composer keeps its text. */
+  setTemporary(temporary: boolean): Promise<boolean>
   open(id: ConversationId): Promise<boolean>
   close(): Promise<boolean>
   releaseTemporary(id: ConversationId): void
@@ -76,8 +79,40 @@ export interface PersonalCommands {
 export interface PersonalInjected { hooks: { personal: HostObservable<PersonalState> }; commands: PersonalCommands }
 export type PersonalPageProps = PropsRuntime<'main'> & PropsLocale<'personalChat'> & InjectFace<PersonalInjected> & PropsStore<ReturnType<typeof createPersonalViewStore>>
 export type NoticeProps = PropsLocale<'personalChat'> & InjectFace<PersonalInjected>
-/** The Chat sidebar region and the Settings dialog also change how the chat list is ordered. */
-export interface NavigationInjected extends PersonalInjected { setOrder(order: ChatOrder): void }
+/**
+ * The Chat sidebar region and the Settings dialog also change how the chat list is ordered.
+ * `seated` is true while the sidebar primary action or Work's New Session carries New chat, which then leaves the region.
+ */
+export interface NavigationInjected extends PersonalInjected { hooks: PersonalInjected['hooks'] & { seated: HostObservable<boolean> }; setOrder(order: ChatOrder): void }
 export type NavigationProps = PropsRuntime<'sidebar.workspaces'> & PropsLocale<'personalChat'> & InjectFace<NavigationInjected> & PropsStore<ReturnType<typeof createPersonalListStore>>
 export type SettingsProps = PropsLocale<'personalChat'> & InjectFace<NavigationInjected> & PropsStore<ReturnType<typeof createPersonalListStore>>
+/** Props Harness gives a primary action icon. */
+export interface PrimaryActionIconProps { readonly size: number }
+/**
+ * One sidebar primary action, as Harness's `ctx.sidebarPrimaryAction.register` takes it (deepseek-harness ui-sidebar README, Primary action).
+ * The lowest `priority` among live registrations runs from the sidebar button, the title-bar control, the brand, and `session.new`.
+ */
+export interface SidebarPrimaryAction {
+  readonly id: string
+  readonly label: string | (() => string)
+  readonly icon: ComponentType<PrimaryActionIconProps>
+  readonly priority?: number
+  /** A reason the action refuses to run, or null while it can. */
+  readonly blocked?: { getSnapshot(): string | null; subscribe(listener: () => void): () => void }
+  run(): void
+}
+/** Harness's sidebar primary action registry. */
+export interface SidebarPrimaryActions {
+  /** @returns a disposer that removes the registration. */
+  register(action: SidebarPrimaryAction): () => void
+}
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /**
+     * Harness 0.2.1-rc.3 does not provide this service, so Beluga waits for it with `ctx.inject` and answers New Session's call on Chat's page instead (`new-session.ts`).
+     * Delete this declaration once Beluga builds against a Harness whose ui-sidebar declares it.
+     */
+    sidebarPrimaryAction: SidebarPrimaryActions
+  }
+}
 declare module '@deepseek-ai/dsh-client-ui-slots' { interface LocaleNamespaceMap { personalChat: PersonalChatKey } }

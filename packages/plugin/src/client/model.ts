@@ -179,6 +179,15 @@ export class PersonalModel {
     this.patch({ detail: undefined, settings: undefined, draftTemporary: temporary, navigation: this.state.getSnapshot().navigation + 1, ...(this.startingModel ? { selectedModel: this.startingModel } : {}), ...(temporary ? { memory: undefined, notice: undefined } : {}) })
     if (!temporary && !this.state.getSnapshot().memory) await this.refreshMemory(false)
   }
+  /**
+   * Make the empty chat on screen temporary or regular, keeping what the composer holds.
+   * @throws when the chat on screen is already saved.
+   */
+  async setTemporary(temporary: boolean): Promise<void> {
+    if (this.state.getSnapshot().detail) throw new Error('A saved chat cannot become temporary or regular')
+    this.patch({ draftTemporary: temporary, ...(temporary ? { memory: undefined, notice: undefined } : {}) })
+    if (!temporary && !this.state.getSnapshot().memory) await this.refreshMemory(false)
+  }
   /** The open chat, saved now if it is still an empty one on screen. */
   private async ensure(): Promise<ConversationDetail> {
     const open = this.state.getSnapshot().detail

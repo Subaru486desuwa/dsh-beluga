@@ -1,4 +1,4 @@
-/** Chat's sidebar region, shown in place of the workspace browser while Chat is open (ADR 0005). */
+/** Chat's sidebar region, shown in place of the workspace browser while the Mode is Chat (ADR 0005). */
 import { useState } from 'react'
 import { IconCodeOutlineRegular, IconEditOutlineRegular, IconSearchOutlineRegular, IconSettingsOutlineRegular, IconSlidersTwoOutlineRegular, Menu, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
@@ -29,24 +29,25 @@ function groupLabel(group: ChatGroup, t: T): string {
  * New chat and search, then pinned chats and the rest grouped by time or by Chat Activity State, with Settings at the foot.
  * Search also finds archived chats, which are tagged.
  * On the folded rail only New chat and a search button that unfolds the sidebar remain.
- * @param props - Sidebar fold state, the shared Chat state and commands, and the remembered order.
+ * New chat leaves the region, wide and folded, while the sidebar primary action or New Session carries it; Temporary Chat is turned on from the empty chat's header.
+ * @param props - Sidebar fold state, the shared Chat state and commands, whether New chat is seated, and the remembered order.
  * @returns the Chat sidebar region.
  */
-export function ChatNavigation({ wide, expandSidebar, usePersonal, commands, useStore, setOrder, t }: NavigationProps) {
+export function ChatNavigation({ wide, expandSidebar, usePersonal, useSeated, commands, useStore, setOrder, t }: NavigationProps) {
   const state = usePersonal(value => value)
+  const seated = useSeated(value => value)
   const order = useStore(value => value.order)
   const [orderOpen, setOrderOpen] = useState(false)
   if (!wide) return <div className={css.navRail}>
-    <button type="button" className={css.navIcon} aria-label={t('newChat')} disabled={state.busy} onClick={() => { void commands.create(false) }}><IconEditOutlineRegular size={20} /></button>
+    {!seated && <button type="button" className={css.navIcon} aria-label={t('newChat')} disabled={state.busy} onClick={() => { void commands.create(false) }}><IconEditOutlineRegular size={20} /></button>}
     <button type="button" className={css.navIcon} aria-label={t('search')} onClick={expandSidebar}><IconSearchOutlineRegular size={20} /></button>
   </div>
   const open = state.detail?.conversation
   const candidates = pendingCandidates(state.memory)
   return <nav className={css.nav} aria-label={t('history')}>
-    <div className={css.navActions}>
+    {!seated && <div className={css.navActions}>
       <button type="button" className={css.navAction} disabled={state.busy} onClick={() => { void commands.create(false) }}><IconEditOutlineRegular size={18} /><span>{t('newChat')}</span></button>
-      <button type="button" className={css.navAction} disabled={state.busy} onClick={() => { void commands.create(true) }}><span className={css.navActionGap} aria-hidden />{t('temporary')}</button>
-    </div>
+    </div>}
     <div className={css.navSearch}>
       <input className={css.search} type="search" aria-label={t('search')} placeholder={t('search')} value={state.query} onChange={event => { commands.search(event.target.value) }} />
       <Menu open={orderOpen} onClose={() => { setOrderOpen(false) }} portal align="end" autoFocus selection="check" selectedId={order}

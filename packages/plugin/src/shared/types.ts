@@ -325,6 +325,8 @@ export interface UploadLimits { readonly uploadBytes: number; readonly attachmen
   /** Whether the Office extension can render files here. */
   readonly office: boolean
 }
+/** The Mode each launch opens in (GLOSSARY.md: Mode). */
+export type StartMode = 'chat' | 'work'
 /** Which GitHub actions that change something run without asking: none, the low-risk ones, or all. */
 export type ApprovalLevel = 'ask' | 'low' | 'all'
 /** Web search and connected apps as the Apps page shows them; never a token. */
@@ -374,6 +376,8 @@ export interface AppsChange {
 }
 export interface PersonalChatOperations {
   limits(): Promise<UploadLimits>
+  /** The configured Mode a launch opens in. */
+  startMode(): Promise<StartMode>
   models(): Promise<readonly ModelChoice[]>
   send(request: { readonly conversationId: ConversationId; readonly requestId: string; readonly branchId?: BranchId; readonly archive?: ArchiveSelection; readonly text: string; readonly attachmentIds?: readonly string[]; readonly model: ModelRef; readonly web?: boolean; readonly github?: boolean }): Promise<ConversationDetail>
   stop(request: { readonly conversationId: ConversationId }): Promise<ConversationDetail>

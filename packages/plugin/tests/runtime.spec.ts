@@ -13,6 +13,7 @@ import PersonalChatService from '../lib/index.js'
 import OfficeExtension from '../../office/lib/index.js'
 import GitHubExtension from '../../github/lib/index.js'
 import { PersonalStore } from '../src/host/storage.ts'
+import { Config } from '../src/host/config.ts'
 import type { ConversationRecord } from '../src/host/records.ts'
 import type { ConversationDetail, ConversationId, MemorySummaryView, PendingAction } from '../src/shared/types.ts'
 import type { MemorySummaries } from '../src/host/memory-summary.ts'
@@ -839,6 +840,11 @@ describe('Office files in Chat', () => {
     await expect(app.service.previewFile({ conversationId: other.conversation.id, attachmentId: file })).rejects.toThrow()
     await expect(app.service.exportPdf({ conversationId: other.conversation.id, attachmentId: file })).rejects.toThrow()
   }, ENGINE_TIME)
+  it('opens in the configured start mode, Chat unless set, and refuses a mode that does not exist', async () => {
+    await expect((await setup()).service.startMode()).resolves.toBe('chat')
+    await expect((await setup(undefined, false, { startMode: 'work' })).service.startMode()).resolves.toBe('work')
+    expect(() => Config({ dataDir: '/data', startMode: 'Chat' as never })).toThrow()
+  })
   it('says when the Office extension is missing', async () => {
     const app = await setup()
     expect((await app.service.limits()).office).toBe(false)
