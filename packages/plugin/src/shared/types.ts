@@ -102,6 +102,16 @@ export interface SheetRange {
   readonly formulas: Readonly<Record<string, string>>
   /** What to read next when the request was larger than one answer. */
   readonly nextRange?: string
+  /** The look of a cell with the workbook's default style: font and size. */
+  readonly defaultLook?: string
+  /** Ranges whose cells look different from the default, each as `range look`. */
+  readonly looks?: readonly string[]
+  /** Widths set on columns, in characters, by column or column span such as `B:D`. */
+  readonly columnWidths?: Readonly<Record<string, number>>
+  /** Heights set on rows, in points, by row number. */
+  readonly rowHeights?: Readonly<Record<string, number>>
+  /** Merged ranges that touch this rectangle. */
+  readonly merged?: readonly string[]
 }
 /** A page a reply consulted. */
 export interface WebSource {

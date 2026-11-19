@@ -25,7 +25,10 @@ export interface RunningTurn {
   readWork?: boolean
   /** Saved Memories given to this turn as context, noted on its reply. */
   recalled: readonly MemoryId[]
-  pendingDocument?: { callId: string; id: string; name: string; bytes: Uint8Array; artifact: NonNullable<ChatAttachment["artifact"]> }
+  /** `update` means `id` is a file this reply made earlier, which takes the new bytes: a reply leaves one Version of an Artifact. */
+  pendingDocument?: { callId: string; id: string; name: string; bytes: Uint8Array; artifact: NonNullable<ChatAttachment["artifact"]>; update: boolean }
+  /** The files this reply made. */
+  readonly made: Set<string>
   /** The GitHub action waiting for the person, and how their answer reaches the turn. */
   approval?: { readonly action: PendingAction; decide(allow: boolean): void }
   /** GitHub as this turn found it: the account and the tools it offers. */

@@ -4,7 +4,12 @@ import { OfficeRenderer } from '../../office/src/engine.ts'
 import { OfficePackage } from '../../office/src/package.ts'
 import { buildTree, parseTree } from '../../office/src/tree.ts'
 import { readRange } from '../../office/src/workbook.ts'
-import { createWorkbook, editWorkbook, settleWorkbook } from '../../office/src/workbook-write.ts'
+import { createWorkbook, settleWorkbook } from '../../office/src/workbook-write.ts'
+import { editWorkbook as edit } from '../../office/src/workbook-edit.ts'
+import type { CellChange } from '../src/host/workbooks.ts'
+
+/** Cell values only, as the tests here change them. */
+const editWorkbook = (bytes: Uint8Array, changes: readonly CellChange[], limit: number, signal: AbortSignal): Uint8Array => edit(bytes, { changes: [...changes] }, limit, signal).bytes
 import { workbook } from './office-fixtures.ts'
 import { PersonalChatError } from 'dsh-beluga'
 import { reachesOutside, validateWorkbook } from '../src/host/workbooks.ts'

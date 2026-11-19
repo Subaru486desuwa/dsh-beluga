@@ -11,7 +11,10 @@ export interface ModelChoice extends ModelRef {
   readonly defaultEffort?: string
   readonly lastUsed?: true
 }
-export interface InlineProvider { readonly baseURL: string; readonly credentialRef: string; readonly models: string[] }
+/** One model the inline route serves; its own `baseURL` or `credentialRef` replaces the route's for this model alone. */
+export interface InlineModel { readonly id: string; readonly baseURL?: string; readonly credentialRef?: string }
+/** The inline route: an OpenAI-compatible endpoint and credential reference, and the models sent there. */
+export interface InlineProvider { readonly baseURL: string; readonly credentialRef: string; readonly models: (string | InlineModel)[] }
 /** The same route, ignoring the effort sent with it. */
 export function sameRoute(left: ModelRef, right: ModelRef): boolean { return left.provider === right.provider && left.model === right.model && !!left.inline === !!right.inline }
 export function routeKey(model: ModelRef): string { return JSON.stringify([model.provider, model.model, !!model.inline]) }

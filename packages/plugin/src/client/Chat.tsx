@@ -9,7 +9,7 @@ import type { PersonalChatKey } from './locales.ts'
 import { decodeBase64, saveFile } from './export.ts'
 import { FilePreview } from './Preview.tsx'
 import { speakable } from './markdown.ts'
-import { turnsOf, variantsOf, type ChatTurn, type Variants } from './turns.ts'
+import { lastVersions, turnsOf, variantsOf, type ChatTurn, type Variants } from './turns.ts'
 import { ActionButton, CopyButton, UserBubble, autoGrow, useMarkdown } from './Message.tsx'
 import { FileTile, officeFile } from './Composer.tsx'
 import { CANDIDATE_REASONS } from './Memory.tsx'
@@ -79,7 +79,7 @@ function Sources({ turn, memory, commands, t }: { turn: ChatTurn; memory: Memory
   </nav>
 }
 
-function FileView({ file, renderable, commands, t }: { file: ChatAttachment; renderable: boolean; commands: PersonalCommands; t: T }) {
+function FileView({ file, renderable, working = false, commands, t }: { file: ChatAttachment; renderable: boolean; working?: boolean; commands: PersonalCommands; t: T }) {
   const [image, setImage] = useState<string | undefined>()
   const [enlarged, setEnlarged] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -108,7 +108,7 @@ function FileView({ file, renderable, commands, t }: { file: ChatAttachment; ren
     <button type="button" className={css.imageThumb} aria-label={t('imagePreview') + ' · ' + file.name} onClick={() => { setEnlarged(true) }}><img src={image} alt={file.name} /></button>
     {enlarged && <ImageLightbox src={image} alt={file.name} labels={{ dialog: t('imagePreview'), close: t('close') }} onClose={() => { setEnlarged(false) }} />}
   </>
-  const note = file.artifact ? t('artifactVersion', { version: file.artifact.version }) : t('inputFile')
+  const note = file.artifact ? t(working ? 'artifactWorking' : 'artifactVersion', { version: file.artifact.version }) : t('inputFile')
   return <div className={css.fileCard}>
     <FileTile name={file.name} note={note} t={t} />
     <div className={css.fileActions}>
@@ -121,9 +121,10 @@ function FileView({ file, renderable, commands, t }: { file: ChatAttachment; ren
     {previewing && <FilePreview file={file} commands={commands} onClose={() => setPreviewing(false)} t={t} />}
   </div>
 }
-function Files({ ids, detail, renderable, commands, t }: { ids: readonly string[]; detail: ConversationDetail; renderable: boolean; commands: PersonalCommands; t: T }) {
-  const files = [...new Set(ids)].map(id => detail.attachments.find(item => item.id === id)).filter(file => file !== undefined)
-  return files.length ? <div className={css.files}>{files.map(file => <FileView key={file.id} file={file} renderable={renderable} commands={commands} t={t} />)}</div> : null
+/** @param working - the reply that makes these files is still running, so they may change again. */
+function Files({ ids, detail, renderable, working, commands, t }: { ids: readonly string[]; detail: ConversationDetail; renderable: boolean; working?: boolean; commands: PersonalCommands; t: T }) {
+  const files = lastVersions([...new Set(ids)].map(id => detail.attachments.find(item => item.id === id)).filter(file => file !== undefined))
+  return files.length ? <div className={css.files}>{files.map(file => <FileView key={file.artifact?.rootId ?? file.id} file={file} renderable={renderable} working={!!working} commands={commands} t={t} />)}</div> : null
 }
 
 /** A network voice would send the reply to the browser vendor, so only voices on this device count. */
@@ -309,7 +310,7 @@ export function ChatMessages({ state, commands, t, children }: { state: Personal
               {approval && <ApprovalCard action={approval} busy={state.busy} commands={commands} t={t} />}
               {running && !turn.text && !status && !approval && !thinkingNow && !turn.todos && <span className={css.pending} role="status" aria-label={t('loading')} />}
               {turn.text && markdown(turn.text, running)}
-              <Files ids={turn.attachmentIds} detail={detail} renderable={renderable} commands={commands} t={t} />
+              <Files ids={turn.attachmentIds} detail={detail} renderable={renderable} working={running} commands={commands} t={t} />
               <MemoryProposals turn={turn} memory={state.memory} busy={state.busy} commands={commands} t={t} />
               <Sources turn={turn} memory={state.memory} commands={commands} t={t} />
               {!running && reply && <div className={css.replyActions}>

@@ -75,10 +75,13 @@ Text reuses Harness model routing. To use images, configure one OpenAI-compatibl
     inlineProvider:
       baseURL: https://YOUR-PROVIDER.example/v1
       credentialRef: YOUR_EXISTING_CREDENTIAL_REFERENCE
-      models: [YOUR_IMAGE_MODEL]
+      models:
+        - YOUR_IMAGE_MODEL
+        - id: MODEL_BEHIND_ANOTHER_KEY
+          credentialRef: ITS_CREDENTIAL_REFERENCE
 ```
 
-Select the model labeled **Inline images**. This route uses the provider API, not a ChatGPT website subscription. It requires explicit provider configuration because rc.3's native attachment pipeline persists image bytes. OpenAI-compatible streaming and inline payloads are covered by a local HTTP fixture; a real provider/model pairing still needs its own acceptance check.
+A model entry may name its own `baseURL` or `credentialRef`; the rest use the route's. A model the inline route serves, such as DeepSeek-V4.1-Flash, is listed once under its Harness name, and all its chats then go through the inline route. Select the model labeled **Inline images**. This route uses the provider API, not a ChatGPT website subscription. It requires explicit provider configuration because rc.3's native attachment pipeline persists image bytes. OpenAI-compatible streaming and inline payloads are covered by a local HTTP fixture; a real provider/model pairing still needs its own acceptance check.
 
 ## Data and removal
 

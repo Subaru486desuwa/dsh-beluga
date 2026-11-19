@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { strToU8, zipSync } from 'fflate'
 
 const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
@@ -33,7 +34,8 @@ export function wordParagraphs(text: string): { part: string; location: string; 
   const found: { part: string; location: string; style: string; text: string }[] = []
   for (const line of text.split('\n').slice(2)) {
     if (line.startsWith('part ')) { part = line.slice(5); continue }
-    const match = /^(\S+)(?: \[([^\]]*)\])? (".*")$/u.exec(line)
+    if (line.startsWith('default look ') || line.startsWith('  {') || /^\S+ table: /u.test(line)) continue
+    const match = /^(\S+)(?: \[([^\]]*)\])?(?: \{[^}]*\})? (".*")$/u.exec(line)
     if (!match) throw new Error('Not a paragraph line: ' + line)
     found.push({ part, location: match[1]!, style: match[2] ?? '', text: JSON.parse(match[3]!) as string })
   }
@@ -77,3 +79,9 @@ export const budgetDeck = (image: string) => ({
     { layout: 'image', title: '季度支出走势', image, bullets: ['下半年支出明显上升', 'Q3 为全年峰值 62,000 元'] },
   ],
 })
+/**
+ * Office 97–2003 files, as an old Excel or Word saved them. The bundled engine reads these formats but cannot write them.
+ * budget.xls: sheet 预算 holding 100 in A1 and =A1*2 in B1, written by SheetJS 0.20.3 as BIFF8.
+ * letter.doc: one paragraph LEGACY_WORD_SENTINEL, saved by LibreOffice Writer as "MS Word 97".
+ */
+export const legacyOffice = (name: 'budget.xls' | 'letter.doc'): Uint8Array => new Uint8Array(readFileSync(new URL('./fixtures/' + name, import.meta.url)))

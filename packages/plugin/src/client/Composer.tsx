@@ -82,8 +82,8 @@ export function FileTile({ name, note, t }: { name: string; note?: string; t: T 
   return <span className={css.fileTile}><span className={css.fileGlyph}><FileTypeIcon path={name} size={22} /></span><span className={css.fileText}><strong>{name}</strong><small>{note ? note + ' · ' : ''}{t(kindKey(name))}</small></span></span>
 }
 
-/** Word, Excel and PowerPoint files, which only the optional Office extension can read. */
-export const officeFile = (name: string): boolean => /\.(docx|xlsx|pptx)$/iu.test(name)
+/** Word, Excel and PowerPoint files, Office 97–2003 ones included, which only the optional Office extension can read. */
+export const officeFile = (name: string): boolean => /\.(docx?|xlsx?|pptx?)$/iu.test(name)
 
 /** @param props.officeMissing - the Office extension is not installed, so Office files are kept but not read. */
 function TrayView({ tray, officeMissing, t }: { tray: Tray; officeMissing: boolean; t: T }) {

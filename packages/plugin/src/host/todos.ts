@@ -20,7 +20,7 @@ const todoList = z.object({
 
 export const todoSchema: ToolSchema = {
   name: TODO_TOOL,
-  description: 'Record and update a task list to plan multi-step work and show the person your progress; skip it for questions and other single-step tasks. Add one todo per concrete step before you start. While work remains, keep exactly one todo `in_progress`. Mark each todo `completed` as soon as it is done. Write todos in the language of the conversation.',
+  description: 'Record and update a task list to plan multi-step work and show the person your progress; skip it for questions and other single-step tasks. Write the list once you have read enough to name every work item, and before you produce the first result: one todo per concrete outcome, ending with a todo that checks the results. While work remains, keep exactly one todo `in_progress`. Mark each todo `completed` as soon as it is done, in the same response as the tool call that starts the next one. Before your final answer, leave no todo `pending` or `in_progress`: finish it, or remove it from the list and say why in your answer. Write todos in the language of the conversation.',
   parameters: {
     type: 'object',
     properties: {

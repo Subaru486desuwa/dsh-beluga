@@ -2,6 +2,7 @@
 import { PersonalChatError } from 'dsh-beluga'
 import type { SheetCell, SheetRange } from 'dsh-beluga'
 import { attr, children, content, descendants, text, relationshipId, type Node, type OfficePackage } from './package.ts'
+import { CellLooks, columnWidths, lookRegions, rowHeights } from './workbook-format.ts'
 
 /** Rows of each sheet shown when a workbook is first read; read_sheet reaches the rest. */
 const SAMPLE_ROWS = 20
@@ -12,7 +13,7 @@ const DAY_MS = 86400000
 /** Built-in number formats that mean a date or time, including the East Asian ones. */
 const DATE_FORMATS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58])
 /** Built-in number formats by id, as Excel reads them; dates, times, currency and accounting are left out, since they follow the locale. */
-const BUILT_IN_FORMATS: Readonly<Record<number, string>> = { 0: 'General', 1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00', 9: '0%', 10: '0.00%', 11: '0.00E+00', 12: '# ?/?', 13: '# ??/??', 37: '#,##0_);(#,##0)', 38: '#,##0_);[Red](#,##0)', 39: '#,##0.00_);(#,##0.00)', 40: '#,##0.00_);[Red](#,##0.00)', 48: '##0.0E+0', 49: '@' }
+export const BUILT_IN_FORMATS: Readonly<Record<number, string>> = { 0: 'General', 1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00', 9: '0%', 10: '0.00%', 11: '0.00E+00', 12: '# ?/?', 13: '# ??/??', 37: '#,##0_);(#,##0)', 38: '#,##0_);[Red](#,##0)', 39: '#,##0.00_);(#,##0.00)', 40: '#,##0.00_);[Red](#,##0.00)', 48: '##0.0E+0', 49: '@' }
 
 export interface Position { readonly row: number; readonly column: number }
 export const targetError = (message: string): PersonalChatError => new PersonalChatError('workbook-target', message)
@@ -166,7 +167,7 @@ export function findSheet(book: Book, name: string | undefined): SheetEntry {
   return sheet
 }
 /** Sheet parts this sheet's relationships lead to, of one kind. */
-function related(book: Book, sheet: SheetEntry, kind: string): string[] {
+export function related(book: Book, sheet: Pick<SheetEntry, 'part'>, kind: string): string[] {
   return book.office.relationships(sheet.part).filter(relation => attr(relation, 'Type').endsWith('/' + kind) && attr(relation, 'TargetMode') !== 'External').map(relation => book.office.target(sheet.part, relation))
 }
 export interface SheetOutline {
@@ -227,18 +228,29 @@ function gridOf(cells: readonly Cell[], sheet: string, first: Position, last: Po
   }
   return { sheet, range: cellRef(first) + ':' + cellRef(last), rows, formulas }
 }
+/** Add how the cells of a read look: where they differ from the default, the column widths and row heights set by hand, and the merged ranges that touch it. */
+function withLooks(read: SheetRange, book: Book, sheet: SheetEntry, cells: readonly Cell[], looks: CellLooks): SheetRange {
+  const { first, last } = parseRange(read.range)
+  const root = book.office.xml(sheet.part)
+  const regions = lookRegions(cells, first, last, looks)
+  const widths = columnWidths(root, first, last)
+  const heights = rowHeights(root, first, last)
+  const merged = descendants(root, 'mergeCell').map(merge => attr(merge, 'ref')).filter(ref => { const range = parseRange(ref); return range.first.row <= last.row && range.last.row >= first.row && range.first.column <= last.column && range.last.column >= first.column })
+  return { ...read, defaultLook: looks.describeDefault(), ...(regions.length ? { looks: regions } : {}), ...(Object.keys(widths).length ? { columnWidths: widths } : {}), ...(Object.keys(heights).length ? { rowHeights: heights } : {}), ...(merged.length ? { merged } : {}) }
+}
 /** @returns one rectangle of a sheet, at most `budget` characters, and where to continue. */
 export function readRange(office: OfficePackage, request: { readonly sheet?: string; readonly range?: string }, budget: number): SheetRange {
   const book = openBook(office)
   const sheet = findSheet(book, request.sheet)
   const cells = sheetCells(book, sheet)
   const { first, last } = parseRange(request.range ?? outlineSheet(book, sheet, cells).range)
-  return gridOf(cells, sheet.name, first, last, budget)
+  return withLooks(gridOf(cells, sheet.name, first, last, budget), book, sheet, cells, new CellLooks(office, book.formats))
 }
 /** @returns one record per sheet and its first rows, for a first read of the workbook. */
 export function workbookRecords(office: OfficePackage): object[] {
   const book = openBook(office)
   const records: object[] = []
+  const looks = new CellLooks(office, book.formats)
   for (const sheet of book.sheets) {
     const cells = sheetCells(book, sheet)
     const { extent: _extent, ...outline } = outlineSheet(book, sheet, cells)
@@ -246,7 +258,8 @@ export function workbookRecords(office: OfficePackage): object[] {
     if (!cells.length) continue
     const { last } = parseRange(outline.range)
     const sample = gridOf(cells, sheet.name, { row: 1, column: 1 }, { row: Math.min(last.row, SAMPLE_ROWS), column: last.column }, Number.MAX_SAFE_INTEGER)
-    records.push(last.row > SAMPLE_ROWS ? { ...sample, nextRange: cellRef({ row: SAMPLE_ROWS + 1, column: 1 }) + ':' + cellRef(last) } : sample)
+    const looked = withLooks(sample, book, sheet, cells, looks)
+    records.push(last.row > SAMPLE_ROWS ? { ...looked, nextRange: cellRef({ row: SAMPLE_ROWS + 1, column: 1 }) + ':' + cellRef(last) } : looked)
   }
   const names = descendants(office.xml('xl/workbook.xml'), 'definedName').map(name => ({ name: attr(name, 'name'), refersTo: text(name) }))
   if (names.length) records.push({ definedNames: names })

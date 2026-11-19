@@ -1,7 +1,7 @@
 /** Reuse configured Harness text routes; an explicit inline route never stores images. */
 import OpenAI from 'openai'
 import type { Context } from '@deepseek-ai/cordis'
-import { attributionHeaders, BlockAssembler, createUserMessage, type GenerateOptions, type ReasoningEffortId, type RequestMessage, type StreamChunk, type ToolCallId } from '@deepseek-ai/dsh-llm'
+import { attributionHeaders, BlockAssembler, createUserMessage, type GenerateOptions, type LlmFailure, type ReasoningEffortId, type RequestMessage, type StreamChunk, type ToolCallId } from '@deepseek-ai/dsh-llm'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { sameRoute, type EffortChoice, type InlineProvider, type ModelChoice, type ModelRef } from '../shared/models.ts'
@@ -15,8 +15,30 @@ const TEXT_INDEX = 1
 const FIRST_TOOL_INDEX = 2
 /** Harness names the effort that turns reasoning off `off`; OpenAI-compatible endpoints spell it `none`. */
 const EFFORT_WIRE: Readonly<Record<string, string>> = { off: 'none' }
-/** Bounds what one background answer may stream. */
-const STREAM_BYTES = 512 * 1024
+/** Above what a route's own output limit lets through, so that limit ends a long reply first and the reply keeps what it has. */
+const STREAM_BYTES = 2 * 1024 * 1024
+/**
+ * Bounds the output one model request may stream: the text, thinking and tool arguments its chunks carry.
+ * A closing chunk restates its block, so it adds only what the block's deltas had not delivered.
+ */
+export class StreamMeter {
+  private readonly delivered = new Map<number, number>()
+  private total = 0
+  /**
+   * @param chunk the next chunk of the request.
+   * @throws PersonalChatError `response-limit` once the request has streamed more than 2 MiB of output.
+   */
+  add(chunk: StreamChunk): void {
+    let bytes = 0
+    if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') bytes = Buffer.byteLength(chunk.text)
+    else if (chunk.type === 'tool-call-delta') bytes = Buffer.byteLength(chunk.argumentsDelta)
+    else if (chunk.type === 'block-end') bytes = Math.max(0, Buffer.byteLength(JSON.stringify(chunk.block)) - (this.delivered.get(chunk.index) ?? 0))
+    else return
+    this.delivered.set(chunk.index, (this.delivered.get(chunk.index) ?? 0) + bytes)
+    this.total += bytes
+    if (this.total > STREAM_BYTES) throw new PersonalChatError('response-limit', 'Response exceeded the 2 MiB stream limit')
+  }
+}
 /**
  * A provider failure code safe to show and log; anything else becomes `MODEL_ERROR`.
  * @param code the failure's provider-neutral code.
@@ -26,22 +48,43 @@ export function safeCode(code: string): string { return /^[A-Z0-9_-]{1,64}$/u.te
 type Reasoning = Pick<ModelChoice, 'efforts' | 'defaultEffort'>
 type ReasoningDelta = { readonly reasoning_content?: string | null; readonly reasoning?: string | null }
 export interface InlineImage { readonly mediaType: string; readonly base64: string }
+/** Where one inline model's requests go. */
+interface InlineEndpoint { readonly baseURL: string; readonly credentialRef: string }
+/**
+ * @throws PersonalChatError `invalid-config` unless the endpoint is HTTPS, or HTTP on loopback for tests, without URL credentials.
+ */
+function inlineEndpoint(baseURL: string, ref: string): InlineEndpoint {
+  const url = new URL(baseURL)
+  if (url.username || url.password || (!['https:'].includes(url.protocol) && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw new PersonalChatError('invalid-config', 'Inline endpoint requires HTTPS or an explicit loopback test endpoint, without URL credentials')
+  credentialRef(ref)
+  return Object.freeze({ baseURL, credentialRef: ref })
+}
+/**
+ * The endpoint each inline model is sent to: its own values where it names them, else the route's.
+ * @throws PersonalChatError `invalid-config` for a model listed twice or an unsafe endpoint.
+ */
+function inlineEndpoints(inline: InlineProvider | undefined): ReadonlyMap<string, InlineEndpoint> {
+  const endpoints = new Map<string, InlineEndpoint>()
+  if (!inline) return endpoints
+  const route = inlineEndpoint(inline.baseURL, inline.credentialRef)
+  for (const entry of inline.models) {
+    const own = typeof entry === 'string' ? { id: entry } : entry
+    if (endpoints.has(own.id)) throw new PersonalChatError('invalid-config', 'Inline model ' + own.id + ' is listed twice')
+    endpoints.set(own.id, inlineEndpoint(own.baseURL ?? route.baseURL, own.credentialRef ?? route.credentialRef))
+  }
+  return endpoints
+}
 export class ModelBridge {
-  constructor(private readonly ctx: Context, private readonly inline?: InlineProvider) {
-    this.inline = inline ? { ...inline, models: [...inline.models] } : undefined
-    if (this.inline) {
-      Object.freeze(this.inline.models); Object.freeze(this.inline)
-      const url = new URL(this.inline.baseURL)
-      if (url.username || url.password || (!['https:'].includes(url.protocol) && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw new PersonalChatError('invalid-config', 'Inline endpoint requires HTTPS or an explicit loopback test endpoint, without URL credentials')
-      credentialRef(this.inline.credentialRef)
-    }
+  private readonly inline: ReadonlyMap<string, InlineEndpoint>
+  constructor(private readonly ctx: Context, inline?: InlineProvider) {
+    this.inline = inlineEndpoints(inline)
   }
   /**
    * List every usable route; a provider whose catalog fails is skipped, not fatal. A model the
    * inline route serves is listed once, as that route, under the Harness name and efforts.
    */
   async models(): Promise<readonly ModelChoice[]> {
-    const inline = this.inline?.models ?? []
+    const inline = [...this.inline.keys()]
     const host = await this.hostChoices()
     const choices = host.map(choice => inline.includes(choice.model) ? this.inlineChoice(choice.model, choice) : choice)
     for (const model of inline) if (!host.some(choice => choice.model === model)) choices.push(this.inlineChoice(model))
@@ -73,7 +116,7 @@ export class ModelBridge {
   }
   /** Check one route against its own catalog, so an unrelated broken provider cannot block it. */
   async available(model: ModelRef): Promise<boolean> {
-    if (model.inline) return model.provider === INLINE_PROVIDER && this.inline?.models.includes(model.model) === true
+    if (model.inline) return model.provider === INLINE_PROVIDER && this.inline.has(model.model)
     try { return (await this.ctx.llm.listModels(model.provider)).some(choice => choice.id === model.model) }
     catch (error) { this.catalogFailed(model.provider, error); return false }
   }
@@ -104,15 +147,14 @@ export class ModelBridge {
   /**
    * One text answer to one input, without tools, for work the person does not wait on.
    * @returns the text, and whether the output limit cut it off.
-   * @throws PersonalChatError when the request stops, fails or streams more than 512 KiB; a failure names its code and is logged.
+   * @throws PersonalChatError when the request stops, fails or streams more than 2 MiB of output; a failure names its code and is logged.
    */
   async complete(model: ModelRef, system: string, input: string, maxTokens: number, signal: AbortSignal): Promise<{ readonly text: string; readonly cut: boolean }> {
     const assembler = new BlockAssembler()
-    let received = 0
+    const meter = new StreamMeter()
     const messages = [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: input }] })]
     for await (const chunk of this.stream(model, { messages, system, maxTokens, signal }, new Map())) {
-      received += Buffer.byteLength(JSON.stringify(chunk))
-      if (received > STREAM_BYTES) throw new PersonalChatError('response-limit', 'Response exceeded the 512 KiB stream limit')
+      meter.add(chunk)
       assembler.push(chunk)
     }
     const finish = assembler.finish
@@ -123,6 +165,24 @@ export class ModelBridge {
       throw new PersonalChatError('model-error', 'Model request failed: ' + code)
     }
     return { text: textOf(assembler.message({ provider: model.provider, model: model.model })), cut: finish.kind === 'max-tokens' }
+  }
+  /**
+   * How long to wait before asking again after a failed request, by the retry policy of the route's provider.
+   * An inline route has no policy and is not asked again.
+   * @param model the route the request went to.
+   * @param failure what the provider reported.
+   * @param retries how many times this request was already asked again.
+   * @returns milliseconds to wait, or undefined when the policy does not retry this failure or its retries are used up.
+   */
+  retryDelay(model: ModelRef, failure: LlmFailure, retries: number): number | undefined {
+    if (model.inline) return undefined
+    const policy = this.ctx.llm.providerRetryPolicy(model.provider)
+    if (policy.mode === 'normal' && (retries >= policy.maxRetries || !policy.retryableCodes.includes(failure.code))) return undefined
+    const local = Math.min(policy.initialDelayMs * 2 ** retries, policy.maxDelayMs)
+    const asked = failure.providerRetryAfterMs
+    if (asked === undefined || !(asked > 0)) return local
+    if (asked <= policy.maxDelayMs) return asked
+    return policy.mode === 'normal' ? undefined : local
   }
   private catalogFailed(provider: string, reason: unknown): void {
     this.ctx.logger.warn('personal-chat: model catalog failed for provider ' + provider)
@@ -135,7 +195,7 @@ export class ModelBridge {
       yield* this.ctx.llm.stream({ ...options, provider: model.provider, model: model.model, ...(model.effort === undefined ? {} : { reasoningEffort: brandString<ReasoningEffortId>(model.effort) }) })
       return
     }
-    const configuration = this.inline
+    const configuration = this.inline.get(model.model)
     if (!configuration) throw new PersonalChatError('image-route-required', 'Inline image route is not configured')
     const credentials = this.ctx.get('credentials')
     const resolved = await credentials?.resolve(credentialRef(configuration.credentialRef))

@@ -25,14 +25,37 @@ export function validateDocument(input: unknown): DocumentInput {
   }
   return value
 }
+const paragraphFormat = z.object({
+  font: z.string().trim().min(1).max(100).refine(clean, 'XML control characters are not allowed').optional(),
+  /** Points. */
+  size: z.number().min(1).max(400).optional(),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  underline: z.boolean().optional(),
+  color: z.string().regex(/^#?[0-9a-fA-F]{6}$/u, 'Give a colour as six hex digits, for example #C00000').optional(),
+  highlight: z.enum(['yellow', 'green', 'cyan', 'magenta', 'blue', 'red', 'darkBlue', 'darkCyan', 'darkGreen', 'darkMagenta', 'darkRed', 'darkYellow', 'darkGray', 'lightGray', 'black', 'none']).optional(),
+  align: z.enum(['left', 'center', 'right', 'justify']).optional(),
+}).strict().refine(value => Object.keys(value).length > 0, 'A format needs at least one property')
+/** The look a change gives a whole paragraph. A property left out stays as it is. */
+export type ParagraphFormat = z.infer<typeof paragraphFormat>
 const change = z.object({
   part: z.string().max(100).optional(),
   location: z.string().min(1).max(500),
-  expected: z.string().max(100000),
-  action: z.enum(['replace', 'insert_after', 'delete']),
+  /** Left out only for `set_cell`, which writes a cell whatever it holds. */
+  expected: z.string().max(100000).optional(),
+  action: z.enum(['replace', 'set_cell', 'insert_after', 'delete', 'format', 'insert_row_after', 'delete_row']),
   text: text.optional(),
-}).strict().refine(value => value.action === 'delete' || value.text !== undefined, 'replace and insert_after need text')
+  format: paragraphFormat.optional(),
+  cells: z.array(text).max(63).optional(),
+}).strict()
+  .refine(value => !['replace', 'set_cell', 'insert_after'].includes(value.action) || value.text !== undefined, 'replace, set_cell and insert_after need text')
+  .refine(value => value.action === 'set_cell' || value.expected !== undefined, 'Every action but set_cell needs expected')
+  .refine(value => value.action !== 'format' || value.format !== undefined, 'format needs format')
+  .refine(value => value.cells === undefined || value.action === 'insert_row_after', 'cells belong to insert_row_after')
+  .refine(value => value.format === undefined || !['delete', 'delete_row'].includes(value.action), 'A deleted paragraph or row takes no format')
 export type ParagraphChange = z.infer<typeof change>
+/** A paragraph an edit wrote, as a read of the new file lists it. */
+export interface ChangedParagraph { readonly part: string; readonly location: string; readonly text: string; /** Length of the text without line breaks, for a limit the document sets on it. */ readonly characters: number; /** Set for a table cell written whole: how many paragraphs it now holds, one per line of `text`. */ readonly paragraphs?: number }
 export const documentEdit = z.object({ attachmentId: z.string().uuid(), summary: z.string().trim().min(1).max(500), track: z.boolean().optional(), changes: z.array(change).min(1).max(200) }).strict()
 /** What opening a file showed, so a reply can stand behind it. */
 export type DocumentCheck =

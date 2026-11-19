@@ -327,6 +327,21 @@ it('shows original input and artifact version cards with downloads', () => {
   expect(screen.getAllByRole('button', { name: 'download' })).toHaveLength(2)
 })
 
+it('shows each artifact of a reply once, as its last version there, and marks it while the reply runs', () => {
+  const file = { id: 'v2', conversationId: 'chat', name: 'Report.docx', bytes: 1024, image: false, mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', artifact: { rootId: 'input', parentId: 'input', version: 2, summary: 'First paragraph' } }
+  const attachments = [{ ...file, id: 'input', artifact: undefined }, file, { ...file, id: 'v3', artifact: { rootId: 'input', parentId: 'v2', version: 3, summary: 'Second paragraph' } }, { ...file, id: 'other', name: 'Notes.docx', artifact: { rootId: 'other', version: 1, summary: 'Created document' } }]
+  const messages = [message('u', 'user', 'Fill it in', { attachmentIds: ['input'] }), message('t1', 'tool', '{}', { attachmentIds: ['v2'] }), message('t2', 'tool', '{}', { attachmentIds: ['other'] }), message('t3', 'tool', '{}', { attachmentIds: ['v3'] })]
+  const state = (live?: object) => ({ busy: false, detail: { conversation: { id: 'chat' }, messages, attachments, ...(live ? { live } : {}) } } as unknown as PersonalState)
+  const view = render(<ChatMessages state={state()} commands={{} as PersonalCommands} t={t} />)
+  expect(screen.getAllByText(/artifactVersion/u).map(node => node.textContent)).toEqual([expect.stringContaining('"version":3'), expect.stringContaining('"version":1')])
+  expect(screen.getByText('Second paragraph')).toBeTruthy()
+  expect(screen.queryByText('First paragraph')).toBeNull()
+  expect(screen.getAllByText(/inputFile/u)).toHaveLength(1)
+  view.rerender(<ChatMessages state={state({ id: 'turn', branchId: 'b', text: '', reasoning: '', stepElapsedMs: 0 })} commands={{} as PersonalCommands} t={t} />)
+  expect(screen.getAllByText(/artifactWorking/u)).toHaveLength(2)
+  expect(screen.queryByText(/artifactVersion/u)).toBeNull()
+})
+
 it('explains an output-limit cutoff instead of a generic failure and keeps retry', () => {
   const state = { busy: false, detail: { conversation: { id: 'chat' }, messages: [message('user', 'user', 'Write')], attachments: [], error: 'max-tokens' } } as unknown as PersonalState
   render(<ChatMessages state={state} commands={{} as PersonalCommands} t={t} />)

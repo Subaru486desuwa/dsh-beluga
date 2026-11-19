@@ -16,10 +16,11 @@ import { PersonalStore } from '../src/host/storage.ts'
 import type { ConversationRecord } from '../src/host/records.ts'
 import type { ConversationDetail, ConversationId, MemorySummaryView, PendingAction } from '../src/shared/types.ts'
 import type { MemorySummaries } from '../src/host/memory-summary.ts'
+import { todoSchema } from '../src/host/todos.ts'
 import { strFromU8, unzipSync, zipSync } from 'fflate'
 import { currentExport, fixture } from './fixtures/chatgpt.ts'
 import { pdf } from './fixtures/pdf.ts'
-import { budgetDeck, formDocument, wordDocument, wordParagraphs, workbook } from './office-fixtures.ts'
+import { budgetDeck, formDocument, legacyOffice, wordDocument, wordParagraphs, workbook } from './office-fixtures.ts'
 import { FakeCredentials, fakeGitHub, FIXTURE_TOKEN } from './github-fixtures.ts'
 import { fakeWork, workday } from './work-fixtures.ts'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -28,7 +29,7 @@ const route = { provider: 'fixture', model: 'echo' }
 /** Long enough for the Office engine to start and open a file. */
 const ENGINE_TIME = 60000
 class ScriptedModel extends LlmAdapter {
-  readonly requests: { sessionId: unknown; system?: string; messages: unknown; tools: readonly string[]; effort?: string }[] = []
+  readonly requests: { sessionId: unknown; system?: string; messages: unknown; tools: readonly string[]; effort?: string; maxTokens?: number }[] = []
   nextTool?: { name: string; arguments: object }
   /** Picks each next call from the last tool result, or from nothing on the first step; undefined answers. */
   follow?: (result: string | undefined) => { name: string; arguments: object } | undefined
@@ -38,6 +39,8 @@ class ScriptedModel extends LlmAdapter {
   ignoresBudget = false
   /** Whether a request to condense a long chat fails. */
   failsCondensing = false
+  /** How many of the next requests fail, and with which code. */
+  failing = { requests: 0, code: 'TRANSPORT' }
   /** Title requests wait for this before answering. */
   titleGate?: Promise<void>
   /** The context window the route discloses, in tokens; undefined discloses none. */
@@ -49,8 +52,17 @@ class ScriptedModel extends LlmAdapter {
     return { provider, id: model, name: 'Scripted echo', inputModalities: ['text'], reasoning: { efforts: [{ id: brandString<ReasoningEffortId>('off'), name: 'Off' }, { id: brandString<ReasoningEffortId>('high'), name: 'High' }], defaultEffort: brandString<ReasoningEffortId>('high') }, ...(this.contextWindow ? { context: { contextWindow: this.contextWindow } } : {}) }
   }
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    this.requests.push({ sessionId: options.sessionId, system: options.system, messages: structuredClone(options.messages), tools: options.tools?.map(tool => tool.name) ?? [], ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}) })
-    const last = options.messages.at(-1)!
+    this.requests.push({ sessionId: options.sessionId, system: options.system, messages: structuredClone(options.messages), tools: options.tools?.map(tool => tool.name) ?? [], ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}), ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }) })
+    if (this.failing.requests > 0) {
+      this.failing.requests--
+      yield { type: 'reasoning-delta', index: 0, text: 'Lost on the way.' }
+      yield { type: 'finish', reason: { kind: 'error', failure: { code: this.failing.code, message: 'Fixture failure' } } }
+      return
+    }
+    // The request after a reply's last allowed tool step ends with the application's notice.
+    const notice = options.messages.at(-1)!
+    const spent = notice.role === 'user' && notice.content.some(block => block.type === 'text' && block.text.includes('used its tool budget'))
+    const last = spent ? options.messages.at(-2)! : notice
     const text = last.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
     // Condensing names the turns it read, after what was condensed before.
     if (options.system?.startsWith('You condense')) {
@@ -81,7 +93,7 @@ class ScriptedModel extends LlmAdapter {
       yield { type: 'finish', reason: { kind: 'stop' } }
       return
     }
-    if (!this.ignoresBudget && options.system?.includes('used its tool budget')) {
+    if (!this.ignoresBudget && spent) {
       yield { type: 'text-delta', index: 0, text: 'Answered from what I found.' }
       yield { type: 'finish', reason: { kind: 'stop' } }
       return
@@ -107,6 +119,15 @@ class ScriptedModel extends LlmAdapter {
       if (text.includes('tool')) yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: brandString<ToolCallId>(randomUUID()), name: 'memory_recall', arguments: '{"query":' } }
       else yield { type: 'text-delta', index: 0, text: 'Cut off mid' }
       yield { type: 'finish', reason: { kind: 'max-tokens' } }
+      return
+    }
+    if (text.startsWith('STREAM')) {
+      // "STREAM <count> <size>": that many thinking chunks of that many bytes, restated when the block closes, then an answer.
+      const [count, size] = text.split(' ').slice(1).map(Number) as [number, number]
+      for (let index = 0; index < count; index++) yield { type: 'reasoning-delta', index: 0, text: 'x'.repeat(size) }
+      yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'x'.repeat(count * size) } }
+      yield { type: 'text-delta', index: 1, text: 'Answered after thinking.' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
       return
     }
     if (text.startsWith('THINK')) {
@@ -539,7 +560,7 @@ describe('Office files in Chat', () => {
     expect(Object.keys(parts).filter(name => /^xl\/charts\/chart\d+\.xml$/u.test(name)).sort()).toEqual(['xl/charts/chart1.xml', 'xl/charts/chart2.xml'])
     expect(strFromU8(parts['xl/charts/chart1.xml']!)).toContain('<c:pt idx="1"><c:v>120</c:v></c:pt>')
     const refused = await turn(app, edited, 'edit_workbook', { attachmentId: version.id, summary: 'Nothing' })
-    expect(refused.result).toContain('Give changes, charts or both')
+    expect(refused.result).toContain('Give at least one change')
   }, ENGINE_TIME)
   it('builds a presentation around an image the person attached, from its bytes', async () => {
     const decks: ReturnType<typeof budgetDeck>[] = []
@@ -620,6 +641,58 @@ describe('Office files in Chat', () => {
     expect(leak.result).toContain('invalid-tool-arguments')
     expect(leak.result).toContain('Formulas cannot reach the network')
   }, ENGINE_TIME)
+  it('reads, previews and edits Office 97–2003 files as their current formats, and leaves the upload alone', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: false })
+    const source = legacyOffice('budget.xls')
+    expect(Buffer.from(source.subarray(0, 4)).toString('hex')).toBe('d0cf11e0')
+    const sheet = await upload(app, chat, '汇总表.xls', source)
+    const letter = await upload(app, chat, '推荐表.doc', legacyOffice('letter.doc'))
+    await send(app.service, await app.service.get({ conversationId: chat.conversation.id }), 'Attached', { attachmentIds: [sheet.id, letter.id] })
+    const attached = await settled(app.service, chat.conversation.id)
+    const { result: text } = await turn(app, attached, 'read_attachment', { attachmentId: sheet.id })
+    expect(text).toContain('"status":"text"')
+    expect(text).toContain('预算')
+    const { result: word } = await turn(app, attached, 'read_attachment', { attachmentId: letter.id })
+    expect(word).toContain('LEGACY_WORD_SENTINEL')
+    const { result: read } = await turn(app, attached, 'read_sheet', { attachmentId: sheet.id, range: 'A1:B1' })
+    expect(read).toContain('[[100,200]]')
+    const preview = await app.service.previewFile({ conversationId: chat.conversation.id, attachmentId: sheet.id })
+    expect(preview.sheet).toBe('预算')
+    const { done, result } = await turn(app, attached, 'edit_workbook', { attachmentId: sheet.id, summary: 'Raise the budget', changes: [{ sheet: '预算', cell: 'A1', value: 300 }] })
+    expect(result).toContain('"recalculated":true')
+    expect(done.attachments.at(-1)).toMatchObject({ name: '汇总表.xlsx', artifact: { version: 2, parentId: sheet.id } })
+    expect(Buffer.from((await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: sheet.id, original: true })).base64, 'base64')).toEqual(Buffer.from(source))
+  }, ENGINE_TIME * 2)
+  it('tells Temporary Chat that an Office 97–2003 file needs the engine it keeps files away from', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: true })
+    const sheet = await upload(app, chat, '汇总表.xls', legacyOffice('budget.xls'))
+    await send(app.service, await app.service.get({ conversationId: chat.conversation.id }), 'Attached', { attachmentIds: [sheet.id] })
+    const attached = await settled(app.service, chat.conversation.id)
+    const { result } = await turn(app, attached, 'read_attachment', { attachmentId: sheet.id })
+    expect(result).toContain('"status":"unsupported"')
+    expect(result).toContain('save it as XLSX')
+  }, ENGINE_TIME)
+  it('gives cells a look, adds rows, and inserts rows with every formula following', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: false })
+    const { done, result: made } = await turn(app, chat, 'create_workbook', { title: '销量', sheets: [{ name: '销量', rows: [['月份', '数量', '金额'], ['一月', 2, { formula: 'B2*10' }], ['二月', 3, { formula: 'B3*10' }], ['合计', { formula: 'SUM(B2:B3)' }, { formula: 'SUM(C2:C3)' }]] }] })
+    expect(made).toContain('"recalculated":true')
+    const file = done.attachments[0]!
+    const { done: looked, result: first } = await turn(app, done, 'edit_workbook', { attachmentId: file.id, summary: 'Head row', formats: [{ sheet: '销量', range: 'A1:C1', format: { bold: true, fill: '#D9E1F2' } }], columnWidths: [{ sheet: '销量', columns: 'A', width: 14 }], merges: [{ sheet: '销量', range: 'E1:F1', merge: true }] })
+    const version = looked.attachments.at(-1)!
+    const changed = JSON.parse(first).changed as { looks: string[]; columnWidths: Record<string, number>; merged: string[] }[]
+    expect(changed[0]).toMatchObject({ range: 'A1:F1', looks: ['A1:C1 bold fill #D9E1F2'], columnWidths: { A: 14 }, merged: ['E1:F1'] })
+    const { done: inserted, result: second } = await turn(app, looked, 'edit_workbook', { attachmentId: version.id, summary: 'Room for March', structure: { sheet: '销量', action: 'insert_rows', before: 3, count: 1 } })
+    expect(JSON.parse(second)).toMatchObject({ structure: { brokenReferences: [], brokenCount: 0, verified: true }, changed: [{ range: 'C3:C3', formulas: { C3: 'B3*10' } }], check: { recalculated: true, errorCount: 0 } })
+    const { result: read } = await turn(app, inserted, 'read_sheet', { attachmentId: inserted.attachments.at(-1)!.id })
+    expect(JSON.parse(read).formulas).toEqual({ C2: 'B2*10', C3: 'B3*10', C4: 'B4*10', B5: 'SUM(B2:B4)', C5: 'SUM(C2:C4)' })
+    const mixed = await turn(app, inserted, 'edit_workbook', { attachmentId: inserted.attachments.at(-1)!.id, summary: 'Both', changes: [{ sheet: '销量', cell: 'A4', value: '三月' }], structure: { sheet: '销量', action: 'delete_rows', first: 2, count: 1 } })
+    expect(mixed.result).toContain('invalid-tool-arguments')
+    const { result: removed } = await turn(app, inserted, 'edit_workbook', { attachmentId: inserted.attachments.at(-1)!.id, summary: 'Drop the count', structure: { sheet: '销量', action: 'delete_columns', first: 'B', count: 1 } })
+    expect(JSON.parse(removed).structure).toMatchObject({ brokenCount: 3, brokenReferences: [{ sheet: '销量', cell: 'B2' }, { sheet: '销量', cell: 'B3' }, { sheet: '销量', cell: 'B4' }], reason: expect.stringContaining('Deleting cells') })
+  }, ENGINE_TIME)
   it('keeps Temporary Chat workbooks off the disk and away from the engine', async () => {
     const app = await setup(undefined, true)
     // A private directory makes any file the engine would have written visible here.
@@ -639,6 +712,63 @@ describe('Office files in Chat', () => {
     expect(edited.attachments[1]?.artifact?.version).toBe(2)
     expect(await readdir(join(app.path, 'attachments'))).toEqual([])
     expect(await readdir(scratch)).toEqual([])
+  }, ENGINE_TIME)
+  it('leaves one version of an artifact per reply, however many times the reply changes it', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: false })
+    const paragraph = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`
+    const attachment = await upload(app, chat, '申请表.docx', wordDocument(paragraph('姓名') + paragraph('成绩')))
+    const results: string[] = []
+    app.adapter.follow = result => {
+      if (result !== undefined) results.push(result)
+      const made = results.length ? (JSON.parse(results[0]!) as { attachmentId: string }).attachmentId : attachment.id
+      if (results.length === 0) return { name: 'edit_document', arguments: { attachmentId: made, summary: 'Fill name', changes: [{ location: 'p1', expected: '姓名', action: 'insert_after', text: '张三' }] } }
+      // The location is the one read before the first change moved the paragraph.
+      if (results.length === 1) return { name: 'edit_document', arguments: { attachmentId: made, summary: 'Fill score', changes: [{ location: 'p2', expected: '成绩', action: 'replace', text: '成绩 95' }] } }
+      // Naming the upload again continues the changed file instead of starting over from the upload.
+      if (results.length === 2) return { name: 'edit_document', arguments: { attachmentId: attachment.id, summary: 'Fill score', changes: [{ location: 'p3', expected: '成绩 95', action: 'replace', text: '成绩 96' }] } }
+      return undefined
+    }
+    await send(app.service, await app.service.get({ conversationId: chat.conversation.id }), 'Fill it in', { attachmentIds: [attachment.id] })
+    const done = await settled(app.service, chat.conversation.id, ENGINE_TIME)
+    expect(done.error).toBeUndefined()
+    const ids = results.map(result => (JSON.parse(result) as { attachmentId: string }).attachmentId)
+    expect(new Set(ids).size, results.join('\n')).toBe(1)
+    expect(results[1]).toContain('"changed":[{"part":"word/document.xml","location":"p3","text":"成绩 95","characters":5}]')
+    expect(results[2]).toContain('"summary":"Fill score"')
+    expect(done.attachments.map(file => file.id)).toEqual([attachment.id, ids[0]])
+    expect(done.attachments[1]!.artifact).toEqual({ rootId: attachment.id, parentId: attachment.id, version: 2, summary: 'Fill name; Fill score' })
+    // A later reply starts the next version and leaves this one as it was.
+    const before = await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: ids[0]!, original: true })
+    const next = await turn(app, done, 'edit_document', { attachmentId: ids[0], summary: 'Correct', changes: [{ location: 'p3', expected: '成绩 96', action: 'replace', text: '成绩 97' }] })
+    expect(next.done.attachments).toHaveLength(3)
+    expect(next.done.attachments[2]!.artifact).toMatchObject({ rootId: attachment.id, parentId: ids[0], version: 3, summary: 'Correct' })
+    expect(await app.service.attachment({ conversationId: chat.conversation.id, attachmentId: ids[0]!, original: true })).toEqual(before)
+    const read = await turn(app, next.done, 'read_attachment', { attachmentId: next.done.attachments[2]!.id })
+    expect(wordParagraphs((JSON.parse(read.result) as { text: string }).text).map(line => line.text)).toEqual(['姓名', '张三', '成绩 97'])
+  }, ENGINE_TIME)
+  it('reads the look and table build of a document, and writes looks and table rows the engine opens', async () => {
+    const app = await setup(undefined, true)
+    const chat = await app.service.create({ temporary: false })
+    const cell = (text: string) => `<w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>${text}</w:t></w:r></w:p></w:tc>`
+    const table = `<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="4000"/></w:tblGrid><w:tr>${cell('奖项')}${cell('时间')}</w:tr></w:tbl>`
+    const attachment = await upload(app, chat, '获奖.docx', wordDocument('<w:p><w:r><w:t>获奖情况</w:t></w:r></w:p>' + table))
+    await send(app.service, await app.service.get({ conversationId: chat.conversation.id }), 'Attached', { attachmentIds: [attachment.id] })
+    const attached = await settled(app.service, chat.conversation.id)
+    const before = await turn(app, attached, 'read_attachment', { attachmentId: attachment.id })
+    expect(before.result).toContain('t1 table: 1 rows, 2 columns; column widths 3.5 7.1 cm; borders none')
+    expect(before.result).toContain('t1.r1.c1.p1 {bold} \\"奖项\\"')
+    const edited = await turn(app, before.done, 'edit_document', { attachmentId: attachment.id, summary: 'Title and one award', changes: [
+      { location: 'p1', expected: '获奖情况', action: 'format', format: { font: '黑体', size: 16, align: 'center' } },
+      { location: 't1.r1.c1.p1', expected: '奖项', action: 'insert_row_after', cells: ['一等奖', '2026 年'], format: { bold: false } },
+    ] })
+    expect(edited.result).toContain('"opened":true')
+    expect(edited.result).toContain('{"part":"word/document.xml","location":"t1.r2.c2.p1","text":"2026 年","characters":6}')
+    const after = await turn(app, edited.done, 'read_attachment', { attachmentId: edited.done.attachments.at(-1)!.id })
+    expect(after.result).toContain('p1 {黑体 16pt center} \\"获奖情况\\"')
+    expect(after.result).toContain('t1.r2.c1.p1 \\"一等奖\\"')
+    const refused = await turn(app, after.done, 'edit_document', { attachmentId: attachment.id, summary: 'Bad', changes: [{ location: 'p1', expected: '获奖情况', action: 'format' }] })
+    expect(refused.result).toContain('format needs format')
   }, ENGINE_TIME)
   it('edits an uploaded document with tracked changes and fills a template', async () => {
     const app = await setup(undefined, true)
@@ -818,6 +948,63 @@ describe('release-blocking limits and failure isolation', () => {
     const next = await settled(app.service, chat.conversation.id)
     expect(next.error).toBeUndefined()
     expect(next.messages.at(-1)?.text).toBe('Echo: continue')
+  })
+
+  it('holds a reply to the route’s own output limit, and a background answer to maxOutputTokens', async () => {
+    const app = await setup(undefined, false, { autoTitles: true, maxOutputTokens: 321 })
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'hello')
+    await settled(app.service, chat.conversation.id)
+    await vi.waitFor(() => expect(app.adapter.requests.some(request => request.system?.startsWith('You title chats'))).toBe(true))
+    const reply = app.adapter.requests.find(request => request.system?.includes('You are a personal assistant'))!
+    expect(reply).not.toHaveProperty('maxTokens')
+    expect(app.adapter.requests.find(request => request.system?.startsWith('You title chats'))!.maxTokens).toBe(321)
+  })
+
+  it('asks again when a step fails in a way the provider retries, and keeps nothing of the failed step', async () => {
+    const app = await setup()
+    let chat = await app.service.create({ temporary: false })
+    app.adapter.failing = { requests: 2, code: 'TRANSPORT' }
+    await send(app.service, chat, 'hello')
+    chat = await settled(app.service, chat.conversation.id)
+    expect(chat.error).toBeUndefined()
+    expect(app.adapter.requests).toHaveLength(3)
+    const reply = chat.messages.at(-1)!
+    expect(reply.role).toBe('assistant')
+    expect(reply.text).not.toBe('')
+    expect(reply.reasoning ?? '').not.toContain('Lost on the way.')
+    app.adapter.failing = { requests: 1, code: 'AUTH' }
+    await send(app.service, chat, 'hello again')
+    chat = await settled(app.service, chat.conversation.id)
+    expect(chat.error).toBe('model-error')
+    expect(app.adapter.requests).toHaveLength(4)
+  })
+
+  it('bounds a step by the output it streams, however many chunks carry it', async () => {
+    const app = await setup()
+    let chat = await app.service.create({ temporary: false })
+    // 12,000 chunks of 8 bytes: 96 KiB of thinking in well over 512 KiB of chunk JSON.
+    await send(app.service, chat, 'STREAM 12000 8')
+    chat = await settled(app.service, chat.conversation.id)
+    expect(chat.error).toBeUndefined()
+    expect(chat.messages.at(-1)).toMatchObject({ role: 'assistant', text: 'Answered after thinking.' })
+    await send(app.service, chat, 'STREAM 3 1048576')
+    chat = await settled(app.service, chat.conversation.id)
+    expect(chat.error).toBe('response-limit')
+  })
+
+  it('tells the model to read, settle the work items, produce and check in that order, and to say what it does first', async () => {
+    const app = await setup()
+    const chat = await app.service.create({ temporary: false })
+    await send(app.service, chat, 'hello')
+    await settled(app.service, chat.conversation.id)
+    const system = app.adapter.requests[0]!.system!
+    expect(system).toContain('Read first: read every document and source the request depends on before you produce anything. Then settle the full list of work items, before you work out the content of any of them. Then produce the results, one work item at a time, with everything that goes into one file in one tool call, not one call per paragraph or section. Then check each result once against what the user asked for')
+    expect(system).toContain('Correct what the check finds, with all corrections to one file in one call, and stop there: do not keep revising a result that meets the request.')
+    expect(system).toContain('Before your first tool call in a reply, tell the user in one or two sentences how you understand the request and what you will do first, and make that tool call in the same response')
+    expect(system).toContain('Write the content itself in your answer or in the tool call that produces the file, never as a draft in your thinking first.')
+    expect(todoSchema.description).toContain('Write the list once you have read enough to name every work item, and before you produce the first result: one todo per concrete outcome, ending with a todo that checks the results.')
+    expect(todoSchema.description).toContain('Before your final answer, leave no todo `pending` or `in_progress`: finish it, or remove it from the list and say why in your answer.')
   })
 
   it('does not execute or retain a tool call truncated by the output limit', async () => {
@@ -1670,7 +1857,8 @@ describe('a long tool chain', () => {
     expect(done.messages.filter(message => message.role === 'tool')).toHaveLength(3)
     expect(done.messages.at(-1)).toMatchObject({ role: 'assistant', text: 'Answered from what I found.' })
     const last = chatRequests(app.adapter).at(-1)!
-    expect(last.system).toContain('used its tool budget')
+    expect(last.system).not.toContain('tool budget')
+    expect(JSON.stringify(last.messages)).toContain('this reply has used its tool budget')
     expect(last.tools).toContain('memory_recall')
   })
   it('runs nothing the model calls after its budget is spent, and keeps the history valid', async () => {

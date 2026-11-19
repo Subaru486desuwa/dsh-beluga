@@ -1,7 +1,7 @@
 /** Personal Chat product copy. */
 /** Simplified Chinese copy and locale key owner. */
 export const zh = {
-  artifactVersion: '产物 · 版本 {version}', inputFile: '输入原件',
+  artifactVersion: '产物 · 版本 {version}', artifactWorking: '产物 · 版本 {version} · 修改中', inputFile: '输入原件',
   replaces: '将替换', stop: '停止生成', noModels: '请先在 Harness 中配置模型', removeAttachment: '移除附件', uploadFailed: '附件上传失败', officeNeeded: '未安装办公扩展，助手读不了', copy: '复制', copied: '已复制', footnotes: '注释', externalImage: '外部图片链接', replyError: '回复未完成：{reason}', replyTruncated: '回复达到输出上限，内容不完整。发送“继续”可让模型接着写', download: '下载文件', fileLimit: '文件超过允许的大小',
   messagePlaceholder: '询问任何问题',
   groupPinned: '置顶', groupToday: '今天', groupYesterday: '昨天', groupWeek: '7 天内', groupRecent: '30 天内', groupRunning: '进行中', groupWaiting: '等你处理', groupReplied: '有新回复', groupRest: '其余',
@@ -62,7 +62,7 @@ export const zh = {
 export type PersonalChatKey = keyof typeof zh
 /** English copy, checked against the Chinese key set. */
 export const en = {
-  artifactVersion: 'Artifact · version {version}', inputFile: 'Original input',
+  artifactVersion: 'Artifact · version {version}', artifactWorking: 'Artifact · version {version} · in progress', inputFile: 'Original input',
   replaces: 'Replaces', stop: 'Stop', noModels: 'Configure a model in Harness first', removeAttachment: 'Remove attachment', uploadFailed: 'Attachment upload failed', officeNeeded: 'Office extension not installed, so the assistant can’t read it', copy: 'Copy', copied: 'Copied', footnotes: 'Footnotes', externalImage: 'External image link', replyError: 'Reply did not finish: {reason}', replyTruncated: 'The reply hit the output limit and is incomplete. Send "continue" to pick it up.', download: 'Download file', fileLimit: 'File exceeds the allowed size',
   messagePlaceholder: 'Ask anything',
   groupPinned: 'Pinned', groupToday: 'Today', groupYesterday: 'Yesterday', groupWeek: 'Previous 7 days', groupRecent: 'Previous 30 days', groupRunning: 'Running', groupWaiting: 'Waiting for you', groupReplied: 'New replies', groupRest: 'Others',

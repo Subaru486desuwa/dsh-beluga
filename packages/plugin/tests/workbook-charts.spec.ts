@@ -128,7 +128,7 @@ describe('adding charts', () => {
     await expect(created([{ ...column, series: [{ values: 'B2:B4' }] }])).rejects.toThrow('values B2:B4 has 3 cells, but categories A2:A5 has 4')
     expect(() => validateWorkbook({ ...budget, charts: [{ ...column, sheet: '其他' }] })).toThrow('the sheets are 预算')
     expect(() => validateWorkbook({ ...budget, charts: [{ ...column, chart: 'pie' }] })).toThrow('A pie chart takes one series')
-    expect(() => workbookEdit.parse({ attachmentId: crypto.randomUUID(), summary: 'Nothing' })).toThrow('Give changes, charts or both')
+    expect(() => workbookEdit.parse({ attachmentId: crypto.randomUUID(), summary: 'Nothing' })).toThrow('Give at least one change')
     expect(() => addCharts(workbook({ S: '' }), [{ ...monthly, sheet: 'T' }], LIMIT, signal)).toThrow('no sheet named "T"')
   })
 })

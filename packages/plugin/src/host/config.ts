@@ -38,8 +38,8 @@ export const Config: z<Config> = z.object({
   maxAttachmentBytes: z.natural().min(1).default(16 * 1024 * 1024),
   maxAttachmentTextBytes: z.natural().min(1024).default(24000),
   maxPdfPages: z.natural().min(1).default(500),
-  maxToolSteps: z.natural().min(1).default(16).description('Model steps with tool calls in one reply; after the last one the model answers without more tools'),
-  maxOutputTokens: z.natural().min(1).default(8192),
+  maxToolSteps: z.natural().min(1).default(48).description('Model steps with tool calls in one reply; after the last one the model answers without more tools'),
+  maxOutputTokens: z.natural().min(1).default(8192).description('Output tokens one background answer may use, thinking included: titles, condensed history, the memory summary and hand-off briefs. A request also leaves this much of the route\'s context window free for the reply. A reply itself is held to the route\'s own output limit'),
   previewTtlMs: z.natural().min(1).default(15 * 60 * 1000),
   temporaryIdleMs: z.natural().min(1000).default(60 * 1000),
   autoTitles: z.boolean().default(true).description('After the first reply, the chat model writes a short title from the first exchange, unless the person renamed the chat'),
@@ -48,6 +48,10 @@ export const Config: z<Config> = z.object({
   inlineProvider: z.union([z.const(undefined), z.object({
     baseURL: z.string().required(),
     credentialRef: z.string().required(),
-    models: z.array(z.string()).required(),
+    models: z.array(z.union([z.string(), z.object({
+      id: z.string().required(),
+      baseURL: z.string(),
+      credentialRef: z.string(),
+    }).description('A model sent to its own endpoint or credential reference instead of the route\'s')])).required(),
   })]),
 })

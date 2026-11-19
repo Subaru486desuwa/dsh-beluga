@@ -58,7 +58,7 @@ export async function createWorkbook(input: WorkbookInput, signal: AbortSignal):
   signal.throwIfAborted()
   return bytes
 }
-function cellNode(prefix: string, ref: string, style: string | undefined, value: WorkbookCell): Element {
+export function cellNode(prefix: string, ref: string, style: string | undefined, value: WorkbookCell): Element {
   const attrs: Record<string, string> = { r: ref, ...(style === undefined ? {} : { s: style }) }
   const leaf = (tag: string, text: string) => element(prefix + tag, {}, [textNode(text)])
   if (value === null) return element(prefix + 'c', attrs)
@@ -68,26 +68,7 @@ function cellNode(prefix: string, ref: string, style: string | undefined, value:
   if ('formula' in value) return element(prefix + 'c', attrs, [leaf('f', value.formula)])
   return element(prefix + 'c', attrs, [leaf('v', String(serialOf(value.date)))])
 }
-/** A style index for a date cell: the cell's own when it already shows a date, or a plain date style added to the workbook. */
-class DateStyles {
-  private tree?: Element[]
-  private added?: string
-  constructor(private readonly book: Book) {}
-  styleFor(current: string | undefined): string {
-    if (current !== undefined && this.book.dateStyles.has(Number(current))) return current
-    if (this.added !== undefined) return this.added
-    if (!this.book.office.has('xl/styles.xml')) throw targetError('This workbook has no styles part, so it cannot take a date')
-    this.tree = parseTree(this.book.office.source('xl/styles.xml'))
-    const formats = require(kids(require(this.tree, 'styleSheet')), 'cellXfs')
-    const list = kids(formats)
-    list.push(element(prefixOf(tagOf(formats)) + 'xf', { numFmtId: '14', fontId: '0', fillId: '0', borderId: '0', xfId: '0', applyNumberFormat: '1' }))
-    setAttr(formats, 'count', String(all(list, 'xf').length))
-    this.added = String(all(list, 'xf').length - 1)
-    return this.added
-  }
-  part(): Uint8Array | undefined { return this.tree && buildTree(this.tree) }
-}
-function placeRow(rows: Element[], rowNumber: number, prefix: string): Element {
+export function placeRow(rows: Element[], rowNumber: number, prefix: string): Element {
   const after = rows.findIndex(row => isElement(row, 'row') && Number(getAttr(row, 'r')) >= rowNumber)
   const existing = after >= 0 && Number(getAttr(rows[after]!, 'r')) === rowNumber ? rows[after]! : undefined
   if (existing) { dropAttr(existing, 'spans'); return existing }
@@ -95,22 +76,22 @@ function placeRow(rows: Element[], rowNumber: number, prefix: string): Element {
   rows.splice(after < 0 ? rows.length : after, 0, row)
   return row
 }
-function placeCell(row: Element, at: Position, make: (current: Element | undefined) => Element): void {
+export function placeCell(row: Element, at: Position, make: (current: Element | undefined) => Element): void {
   const cells = kids(row)
   const after = cells.findIndex(cell => isElement(cell, 'c') && position(getAttr(cell, 'r')!).column >= at.column)
   const current = after >= 0 && position(getAttr(cells[after]!, 'r')!).column === at.column ? cells[after] : undefined
   if (current) cells[after] = make(current)
   else cells.splice(after < 0 ? cells.length : after, 0, make(undefined))
 }
-const inside = (range: string, at: Position): boolean => { const { first, last } = parseRange(range); return at.row >= first.row && at.row <= last.row && at.column >= first.column && at.column <= last.column }
-function refuseProtected(outline: OutlinedSheet, arrays: readonly string[], change: CellChange, at: Position): void {
+export const inside = (range: string, at: Position): boolean => { const { first, last } = parseRange(range); return at.row >= first.row && at.row <= last.row && at.column >= first.column && at.column <= last.column }
+export function refuseProtected(outline: OutlinedSheet, arrays: readonly string[], change: Pick<CellChange, 'cell'>, at: Position): void {
   const merged = outline.merged.find(range => inside(range, at))
   if (merged && cellRef(parseRange(merged).first) !== change.cell) throw targetError(`${change.cell} is inside merged range ${merged}; edit its first cell`)
   for (const table of outline.tables) if (inside(table.ref, at) && at.row === parseRange(table.ref).first.row) throw targetError(`${change.cell} is a header of table ${table.name}; table headers cannot be edited here`)
   if (arrays.some(range => inside(range, at))) throw targetError(`${change.cell} belongs to an array formula, which cannot be edited here`)
 }
 /** Turn a shared formula into plain ones so its anchor cell can change without breaking the cells that repeat it. */
-function expandShared(cells: readonly Cell[], tree: readonly Element[], targets: ReadonlySet<string>): void {
+export function expandShared(cells: readonly Cell[], tree: readonly Element[], targets: ReadonlySet<string>): void {
   const formulas = new Map(cells.map(cell => [cell.ref, cell.formula]))
   const anchors = deep(tree, 'c').filter(node => targets.has(getAttr(node, 'r')!) && find(kids(node), 'f') !== undefined && getAttr(find(kids(node), 'f')!, 't') === 'shared' && textOf(find(kids(node), 'f')!) !== '')
   for (const anchor of anchors) {
@@ -125,7 +106,7 @@ function expandShared(cells: readonly Cell[], tree: readonly Element[], targets:
     }
   }
 }
-function growDimension(worksheet: Element, changed: readonly Position[]): void {
+export function growDimension(worksheet: Element, changed: readonly Position[]): void {
   const dimension = find(kids(worksheet), 'dimension')
   if (!dimension) return
   const ref = getAttr(dimension, 'ref')
@@ -136,7 +117,7 @@ function growDimension(worksheet: Element, changed: readonly Position[]): void {
   setAttr(dimension, 'ref', cellRef(first) + ':' + cellRef({ row, column }))
 }
 /** Parts that stay correct only if Excel rebuilds them, plus the flag that makes it calculate on opening. */
-function refreshParts(office: OfficePackage, changes: Map<string, Uint8Array | undefined>): void {
+export function refreshParts(office: OfficePackage, changes: Map<string, Uint8Array | undefined>): void {
   const tree = parseTree(office.source('xl/workbook.xml'))
   const workbook = require(tree, 'workbook')
   const list = kids(workbook)
@@ -161,51 +142,7 @@ function refreshParts(office: OfficePackage, changes: Map<string, Uint8Array | u
   links.splice(0, Infinity, ...links.filter(node => !getAttr(node, 'Type')?.endsWith('/calcChain')))
   changes.set(relationsPath, buildTree(relations))
 }
-/**
- * Change cells in place. Every part the changes do not reach keeps its exact content.
- * @param limit - bound on the inflated package.
- */
-export function editWorkbook(bytes: Uint8Array, changes: readonly CellChange[], limit: number, signal: AbortSignal): Uint8Array {
-  signal.throwIfAborted()
-  const office = OfficePackage.open(bytes, limit, signal, true)
-  const book = openBook(office)
-  const seen = new Set<string>()
-  for (const change of changes) {
-    const key = change.sheet + '\u0000' + change.cell
-    if (seen.has(key)) throw targetError(`${change.cell} on ${change.sheet} is changed twice`)
-    seen.add(key)
-  }
-  const dates = new DateStyles(book)
-  const parts = new Map<string, Uint8Array | undefined>()
-  for (const name of new Set(changes.map(change => change.sheet))) {
-    const sheet = findSheet(book, name)
-    const here = changes.filter(change => change.sheet === name)
-    const cells = sheetCells(book, sheet)
-    const outline = outlineSheet(book, sheet, cells)
-    const tree = parseTree(office.source(sheet.part))
-    const worksheet = require(tree, 'worksheet')
-    const prefix = prefixOf(tagOf(worksheet))
-    const rows = kids(require(kids(worksheet), 'sheetData'))
-    expandShared(cells, tree, new Set(here.map(change => change.cell)))
-    const arrays = deep(tree, 'f').flatMap(formula => { const range = getAttr(formula, 'ref'); return getAttr(formula, 't') === 'array' && range ? [range] : [] })
-    for (const change of here) {
-      const at = position(change.cell)
-      refuseProtected(outline, arrays, change, at)
-      placeCell(placeRow(rows, at.row, prefix), at, current => {
-        const style = current && getAttr(current, 's')
-        const isDate = change.value !== null && typeof change.value === 'object' && 'date' in change.value
-        return cellNode(prefix, change.cell, isDate ? dates.styleFor(style) : style, change.value)
-      })
-    }
-    growDimension(worksheet, here.map(change => position(change.cell)))
-    parts.set(sheet.part, buildTree(tree))
-  }
-  const styles = dates.part()
-  if (styles) parts.set('xl/styles.xml', styles)
-  refreshParts(office, parts)
-  return office.rewrite(parts)
-}
-function reaches(office: OfficePackage, book: Book): boolean {
+export function reaches(office: OfficePackage, book: Book): boolean {
   if (office.names().some(name => name.startsWith('xl/externalLinks/') || name === 'xl/connections.xml')) return true
   if (deep(parseTree(office.source('xl/workbook.xml')), 'definedName').some(name => reachesOutside(textOf(name)))) return true
   return book.sheets.some(sheet => sheetCells(book, sheet).some(cell => cell.formula !== undefined && reachesOutside(cell.formula)))

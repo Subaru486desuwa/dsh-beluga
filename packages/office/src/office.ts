@@ -4,9 +4,10 @@ import type { AttachmentText } from 'dsh-beluga'
 import { OfficePackage, attr, children, content, descendants, fail, relationshipId, type Node } from './package.ts'
 import { shortStep } from './locations.ts'
 import { workbookRecords } from './workbook.ts'
+import { WordFormats, describeTable } from './word-format.ts'
 
 /** Locations repeat on every paragraph, so they stay short: framing once took four fifths of a form's text. */
-const WORD_LEGEND = 'Word paragraphs, one per line: location, [style] when set, then the text as a JSON string. A "part" line names the file part of the paragraphs below it. Locations count paragraphs (p), tables (t), rows (r) and cells (c) from the start of the part, so t2.r3.c1.p1 is paragraph 1 of cell 1 in row 3 of table 2. Give edit_document the part and location as written here.'
+const WORD_LEGEND = 'Word paragraphs, one per line: location, [style] when set, {look} when it differs from the default look, then the text as a JSON string. A "part" line names the file part of the paragraphs below it. Locations count paragraphs (p), tables (t), rows (r) and cells (c) from the start of the part, so t2.r3.c1.p1 is paragraph 1 of cell 1 in row 3 of table 2; c counts the cells of a row, so a cell merged across columns is one c. Give edit_document the part and location as written here. A look lists font (East Asian/Latin), size, bold, italic, underline, strike, colour, highlight and alignment; on an empty paragraph it is the look new text takes there. {mixed} means the paragraph has stretches that look different, listed on the indented lines below it. A "table" line comes before the paragraphs of its table and gives its rows and columns, column widths, borders, merged cells and shaded cells.'
 /** The element whose children are the part's paragraphs and tables: the body of the document, or the header or footer itself. */
 function contentRoot(tree: Node): Node {
   const root = tree.children.find(node => !node.tag.startsWith('?') && !node.tag.startsWith('#')) ?? fail('Word part has no root element')
@@ -25,6 +26,8 @@ export function extractOfficeText(bytes: Uint8Array, name: string, limit: number
     const main = 'word/document.xml'
     office.xml(main)
     output.push(WORD_LEGEND)
+    const formats = new WordFormats(office)
+    output.push('default look {' + formats.describeDefault() + '}')
     for (const part of [main, ...office.names().filter(key => /^word\/(header|footer)\d+\.xml$/u.test(key)).sort()]) {
       output.push('part ' + part)
       const walk = (parent: Node, path: string) => {
@@ -32,9 +35,13 @@ export function extractOfficeText(bytes: Uint8Array, name: string, limit: number
         for (const node of parent.children) {
           counts[node.tag] = (counts[node.tag] ?? 0) + 1
           const location = (path ? path + '.' : '') + shortStep(node.tag, counts[node.tag])
+          if (node.tag === 'tbl') output.push(location + ' ' + describeTable(node))
           if (node.tag !== 'p') { walk(node, location); continue }
           const style = attr(descendants(node, 'pStyle')[0] ?? node, 'val')
-          output.push(location + (style ? ' [' + style + ']' : '') + ' ' + JSON.stringify(content(node)))
+          const segments = formats.paragraph(node)
+          const look = segments.length > 1 ? 'mixed' : segments[0]!.look
+          output.push(location + (style ? ' [' + style + ']' : '') + (look ? ' {' + look + '}' : '') + ' ' + JSON.stringify(content(node)))
+          if (segments.length > 1) for (const segment of segments) output.push('  {' + segment.look + '} ' + JSON.stringify(segment.text))
         }
       }
       walk(contentRoot(office.xml(part)), '')

@@ -11,7 +11,9 @@ export function apply(ctx) {
     async *stream(options) {
       if (options.sessionId !== undefined) throw new Error('Personal Chat unexpectedly created a Work Session')
       const last = options.messages.at(-1)
-      const asked = options.messages.findLast(message => message.role === 'user')
+      // The request after a reply's last allowed tool step ends with the application's notice, not the person's message.
+      const spent = options.messages.at(-1).role === 'user' && options.messages.at(-1).content.some(block => block.type === 'text' && block.text.includes('used its tool budget'))
+      const asked = options.messages.slice(0, spent ? -1 : undefined).findLast(message => message.role === 'user')
       const question = asked.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
       // The memory summary: return only the parts that change, or answer on the summary page.
       if (options.system?.startsWith('You maintain a memory summary')) {
@@ -60,9 +62,9 @@ export function apply(ctx) {
       }
       // `LOOP` keeps looking things up, one step at a time, until told the reply's tool budget is spent.
       if (question.startsWith('LOOP')) {
-        if (options.system?.includes('used its tool budget')) yield { type: 'text-delta', index: 0, text: 'Budget spent after ' + options.messages.filter(message => message.role === 'tool').length + ' results; answering from what I found.' }
+        if (spent) yield { type: 'text-delta', index: 0, text: 'Budget spent after ' + options.messages.filter(message => message.role === 'tool').length + ' results; answering from what I found.' }
         else yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: randomUUID(), name: 'memory_recall', arguments: JSON.stringify({ query: 'step ' + options.messages.length }) } }
-        yield { type: 'finish', reason: { kind: options.system?.includes('used its tool budget') ? 'stop' : 'tool-calls' } }
+        yield { type: 'finish', reason: { kind: spent ? 'stop' : 'tool-calls' } }
         return
       }
       // `GITHUB <tool> <arguments>` loads that GitHub tool, calls it, then reports what came back.

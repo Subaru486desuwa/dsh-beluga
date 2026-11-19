@@ -218,3 +218,72 @@ Checked with 424 automated tests and the type check, then installed on the daily
 - Memory Lookup, with the person's agreement to leave one archived Work session: with the switch on, the main agent of a new Work session called `personal_memory_lookup` once with a query that matched nothing. The logged result had only `memories`, empty, and `summary`, and no error. After the switch was turned off, the same session's next call got `unknown tool "personal_memory_lookup"` from Harness. The session was then archived, and the switch left off.
 
 Not checked: the subagent and PTC refusals on the daily service, which the automated tests cover; the `memory_propose` refusal and the summary skip with a real model.
+
+## Multi-file replies (2026-11-17)
+
+A real reply on the daily service, given four attachments and a one-sentence request, ended after its opening sentence with "The reply hit the output limit and is incomplete". Lengths taken from its stored turn, without reading any text, showed two attempts alike: four reads over two steps, then a third step of about 20,000 characters of thinking with no text and no tool call, ended by the 8,192-token `maxOutputTokens`. Replayed in an isolated profile on the same route and effort, three runs per build, the installed build failed 3 of 3 the same way. Removing one limit exposed the next: without the token limit the same step thought for 35,000 to 71,000 characters and was cut by the 512 KiB stream limit, which counted the JSON of every chunk; with that corrected, 4 of 6 replies ran out of `maxToolSteps` at 16 while correcting their files, and all 4 answered the request that told them to stop with another tool call. Two later replies ended on a `TRANSPORT` failure of the provider.
+
+- A reply step no longer sends `maxOutputTokens`; the route's own output limit applies. `maxOutputTokens` still bounds background answers and the room a request leaves for the reply.
+- The stream limit counts the text, thinking and tool arguments one request streams, 2 MiB in all, instead of the JSON of its chunks.
+- `maxToolSteps` now defaults to 48. The notice that the budget is spent is the last message of that request instead of the end of the system prompt.
+- A step that fails in a way its provider's retry policy retries is asked again, and nothing of the failed step is kept.
+- The system prompt asks for multi-step work in order: read every source, settle the work items, produce them one at a time, check each result once and correct it in one pass. It asks for a sentence in the same response as the first tool call and at each change of phase, and for thinking kept to decisions and outlines. The to-do tool asks for the list after reading and before the first result, ending with a checking item, updated as items finish and closed before the final answer.
+
+Checked with 441 automated tests and the type check; the four new tests cover the missing output limit, the stream limit, the retry and the instructions, and the two tool-budget tests now read the notice from the last message. Then with the packed tarball in isolated profiles on the real route, `deepseek-flash` at high effort, three runs per case:
+
+| Case | Installed build | This build |
+|---|---|---|
+| The four-attachment request | 0 of 3 finished, all `max-tokens` after 3 steps | 3 of 3 finished: opening sentence, list written before the first file, list closed, final answer; 15, 18 and 45 steps in 5.5, 7.5 and 15.4 minutes |
+| A synthetic task of four files and two forms | 3 of 3 finished, 1 with a list | 3 of 3 finished, 3 with a list written before the first file, 2 closed |
+| A question about one attachment | 3 of 3 answered, no list | 3 of 3 answered, no list |
+| A plain question | 3 of 3 answered, no list | 3 of 3 answered, no list |
+
+Held to 6 tool steps, the 2 replies that reached the budget both ended with a written account of what was finished and what was left. Installed on the daily service after a backup taken with the service stopped.
+
+Not checked: the reply in the browser; the retry against a real provider failure, which only the fixture exercised. Known limits: a reply still spends most of its steps correcting its files, because an edit refused after an earlier edit moved the paragraphs costs a step and a reread; the list is seldom updated between its first and last version; and one run ended on `MALFORMED_RESPONSE`, which the default retry policy does not retry.
+
+## One version per reply, looks, and worksheet structure (2026-11-17)
+
+A reply on the daily service that filled two forms left 14 file cards, one per `edit_document` call. This round makes a Version the state of an Artifact at the end of a Turn, lets a read tell the look of text, cells and tables, and extends what a change can do to Word and Excel files.
+
+- Changes during one reply overwrite the version that reply made; the chat shows one card per Artifact per reply, marked in progress while the reply runs. Chats stored earlier show the last version each reply made, and their stored files are untouched.
+- Within one reply, an id of the file as it was means the changed file, for reads and for changes.
+- `edit_document` takes all changes to a file in one call, finds a moved paragraph by its expected text or the first 20 characters of it, returns each changed paragraph with its location and character count, sets font, size, weight, italic, underline, colour, highlight and alignment, and adds or deletes table rows.
+- `read_attachment` gives each Word paragraph's differences from the default look and one line per table: rows and columns, column widths, borders, merged and shaded cells.
+- `read_sheet` gives the ranges that share a look, column widths, row heights and merged ranges. `edit_workbook` sets looks, column widths, row heights and merges, adds rows below the data, adds sheets, and inserts or deletes rows and columns.
+
+Checked with 508 automated tests and the type check. Then with the packed tarballs in isolated profiles on the real route, `deepseek-flash` at high effort, three runs per case, on synthetic files:
+
+| Case | Installed build | This build |
+|---|---|---|
+| Fill two Word forms from two source files | 3 of 3 finished; 7.0 files stored, 18.3 steps and 3.3 refused calls on average | 3 of 3 finished; 2.0 files stored, one per form; 20.3 steps and 4.7 refused calls on average |
+| Insert a row into a workbook with totals, format it and add a summary sheet | not possible | 3 of 3 finished in 36 to 47 seconds; 1 file stored, 6.3 steps, no refused call; read back, each had the row in place, both totals right, the looks asked for and the summary sheet |
+
+The first evaluation of this build found that the model named the upload's id again for each further change, so every change started over from the upload: one workbook run stored three files and lost its earlier changes, and one form run took 49 steps with 12 refused calls. The id rule above was added for this, and the table reports the build with it. Installed on the daily service, plugin and Office extension together because the engine interface changed, after a backup taken with the service stopped; the service came back active and the stored data version was unchanged.
+
+Not checked: the cards in the browser; the look of the changed files in Word and Excel themselves. Known limits: form replies still vary from 7 to 37 steps, and the refused calls that remain are changes whose expected text the model's own earlier change replaced; a deletion is not compared by calculation, only its `#REF!` formulas are reported; rows and columns cannot be inserted or deleted on a sheet with a pivot table, notes, embedded objects, sparklines, a data table, or a formula that ranges across several sheets; a range that ends just before an insertion does not grow; Word table styles and Excel conditional formats, table styles and whole-row or whole-column styles do not appear in a read; cell borders are set as all sides or none; PowerPoint files are unchanged.
+
+### Whole-cell writes (2026-11-17)
+
+The form replies above still took 7 to 37 steps. Their traces showed one `edit_document` call per paragraph, a recount after each, and refused calls whose expected text the reply's own earlier change had replaced; a form cell often holds several paragraphs, and a form's length limit is on the cell. `edit_document` now has `set_cell`: it gives a table cell its whole text, one paragraph per line, needs no expected text, and returns the cell's text, character count and paragraph count.
+
+Checked with 513 automated tests and the type check, then on the same synthetic task and route, five runs: 5 of 5 finished, 2.0 files stored, 8.0 steps (5 to 10), 0.2 refused calls and 122 seconds on average, against 20.3 steps, 4.7 refused calls and 279 seconds for the build before it. All ten filled forms, read back, kept the three length limits the task sets. Installed on the daily service, plugin and Office extension together, after a backup taken with the service stopped; the service came back active with no activation failure in its log, and the stored data version and chat count were unchanged.
+
+Not checked: forms whose cells hold nested tables, which `set_cell` refuses; a form filled outside tables, where paragraphs are still changed one by one.
+
+
+### Office 97–2003 files (2026-11-17)
+
+A reply on the daily service said it could not read an attached `.xls` and asked for an XLSX: `read_attachment` treated anything but DOCX, XLSX and PPTX as text and returned "not valid UTF-8 text". DOC, XLS and PPT files are now converted by LibreOffice to DOCX, XLSX and PPTX before they are read, previewed, exported to PDF or changed. A change gives a new version in the current format, and the upload stays as it was. Temporary Chat keeps files away from the engine, so there `read_attachment` reports that the file must be saved in the current format or read in a regular chat.
+
+Checked with two runtime tests on an XLS written by SheetJS and a DOC saved by LibreOffice Writer, both red before the change, and the full suite: 514 of 515 passed, and the one failure, a storage test that timed out at 20 seconds under the full run, passed on its own. Then, with the packed tarballs in an isolated profile on the real route, `deepseek-flash` at high effort, one run: the model read A1, B1 and the formula `A1*2` from the XLS, changed A1 to 300 into version 2 `汇总表.xlsx`, and read back 600 in B1, in 4 steps and 23 seconds with no refused call. Installed on the daily service, plugin and Office extension together because the engine interface changed, after a backup taken with the service stopped; the service came back active with no activation failure in its log, and the stored data version (5) and chat count (348) were unchanged.
+
+Not checked: a PPT file; a legacy file the user saved in a real Excel or Word; the preview and PDF buttons in the browser.
+
+## DeepSeek Flash reads images (2026-11-18)
+
+On the daily service, a chat with an image and DeepSeek-V4.1-Flash selected said "This model can't read images". Beluga sends images only through its inline route, which took one endpoint and one credential reference, and on the daily profile that reference's channel does not serve `deepseek-flash`. A direct request to the same OpenAI-compatible endpoint answered "Red" for a red test image with the DeepSeek credential and returned `model_not_found` with the inline route's credential. An entry in `inlineProvider.models` may now name its own `baseURL` or `credentialRef`; plain model names keep the route's.
+
+Checked with two model-bridge tests, red before the change, and the full suite: 521 of 521 passed, with the type check. Then with the packed tarballs in an isolated profile, the inline route configured as on the daily service plus `deepseek-flash` under `DEEPSEEK_API_KEY`, two runs: Personal Chat listed `deepseek-flash` as an inline route, and for an uploaded red PNG asking for its colour it answered "Red" in one step. Installed on the daily service, plugin and Office extension together, after a backup taken with the service stopped, with the `deepseek-flash` entry added to the profile patch; the service came back active with no activation failure in its log, and the stored data version (5) and chat count (350) were unchanged.
+
+Not checked: the picker and a reply in the browser. Known limits: every DeepSeek Flash chat, with or without images, now goes through the inline route, which has no Harness retry policy; on this endpoint `reasoning_effort: none` still returns reasoning, so Off may not turn thinking off.

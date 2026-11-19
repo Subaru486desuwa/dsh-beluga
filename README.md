@@ -93,10 +93,13 @@ Text reuses Harness model routing. To use images, configure one OpenAI-compatibl
     inlineProvider:
       baseURL: https://YOUR-PROVIDER.example/v1
       credentialRef: YOUR_EXISTING_CREDENTIAL_REFERENCE
-      models: [YOUR_IMAGE_MODEL]
+      models:
+        - YOUR_IMAGE_MODEL
+        - id: MODEL_BEHIND_ANOTHER_KEY
+          credentialRef: ITS_CREDENTIAL_REFERENCE
 ```
 
-Select the model labeled **Inline images**. This route uses the provider API, not a ChatGPT website subscription. It requires explicit provider configuration because rc.3's native attachment pipeline persists image bytes. OpenAI-compatible streaming and inline payloads are covered by a local HTTP fixture; a real provider/model pairing still needs its own acceptance check.
+A model entry may name its own `baseURL` or `credentialRef`; the rest use the route's. A model the inline route serves, such as DeepSeek-V4.1-Flash, is listed once under its Harness name, and all its chats then go through the inline route. Select the model labeled **Inline images**. This route uses the provider API, not a ChatGPT website subscription. It requires explicit provider configuration because rc.3's native attachment pipeline persists image bytes. OpenAI-compatible streaming and inline payloads are covered by a local HTTP fixture; a real provider/model pairing still needs its own acceptance check.
 
 ## Data and removal
 
@@ -114,7 +117,7 @@ Use a distinct `dataDir` for each concurrently running profile; the writer lease
 
 After explicit installation of the Office extension:
 
-- **Reading:** DOCX, XLSX and PPTX as source records, and any range of a worksheet, with formulas listed apart from their saved results.
+- **Reading:** DOCX, XLSX and PPTX as source records, and any range of a worksheet, with formulas listed apart from their saved results. Office 97–2003 DOC, XLS and PPT files are converted to their current format first; changing one gives a new version in that format, and Temporary Chat cannot read them because conversion needs files on disk.
 - **Preview and PDF:** Office files render on this machine with the LibreOffice engine that ships with Harness. The layout can differ slightly from Word or Excel.
 - **Word:** create documents with lists, tables, charts, a table of contents, page numbers and Chinese fonts; change paragraphs of any DOCX, uploads included, with optional tracked changes; fill `{{name}}` templates.
 - **Excel:** create workbooks; change cells of any XLSX, uploads included, leaving everything else as it was. Add native column, bar, line and pie charts to either; they read their cells, so they follow the data. Formulas are recalculated and errors such as `#REF!` come back to the model. New sheets print one page wide.

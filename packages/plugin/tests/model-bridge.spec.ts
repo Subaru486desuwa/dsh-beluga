@@ -7,7 +7,18 @@ import { ModelBridge } from '../src/host/model-bridge.ts'
 
 const cleanups: (() => Promise<void>)[] = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
+/** Stand-in credential values by reference; neither is a real key. */
+const FIXTURE_KEYS: Readonly<Record<string, string>> = { TEST_INLINE_KEY: 'fixture-not-a-real-key', TEST_SECOND_KEY: 'second-fixture-key' }
 async function endpoint(final: boolean, thought?: string) {
+  const { url, requests } = await fixtureServer(final, thought)
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  ctx.reflect.provide('credentials', { resolve: async (ref: string) => { expect(Object.keys(FIXTURE_KEYS)).toContain(ref); return { value: FIXTURE_KEYS[ref]!, source: 'test' } } })
+  cleanups.push(() => ctx.fiber.dispose())
+  return { ctx, url, bridge: new ModelBridge(ctx, { baseURL: url, credentialRef: 'TEST_INLINE_KEY', models: ['vision-test'] }), requests }
+}
+/** One OpenAI-compatible streaming endpoint that records every request it receives. */
+async function fixtureServer(final: boolean, thought?: string) {
   const requests: { headers: Record<string, unknown>; body: Record<string, unknown> }[] = []
   const server = createServer((request, response) => {
     const chunks: Buffer[] = []
@@ -25,11 +36,7 @@ async function endpoint(final: boolean, thought?: string) {
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('No test address')
   cleanups.push(async () => { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) })
-  const ctx = new Context()
-  await ctx.plugin(LlmRuntime)
-  ctx.reflect.provide('credentials', { resolve: async (ref: string) => { expect(ref).toBe('TEST_INLINE_KEY'); return { value: 'fixture-not-a-real-key', source: 'test' } } })
-  cleanups.push(() => ctx.fiber.dispose())
-  return { ctx, bridge: new ModelBridge(ctx, { baseURL: 'http://127.0.0.1:' + address.port + '/v1', credentialRef: 'TEST_INLINE_KEY', models: ['vision-test'] }), requests }
+  return { url: 'http://127.0.0.1:' + address.port + '/v1', requests }
 }
 describe('explicit inline image transport', () => {
   it('admits only configured inline routes', async () => {
@@ -103,5 +110,24 @@ describe('inline route beside Harness routes', () => {
     for await (const _ of fixture.bridge.stream({ provider: 'personal-inline', model: 'vision-test', inline: true }, { messages: [message] }, new Map())) { /* drained */ }
     expect(fixture.requests.map(request => request.body.reasoning_effort)).toEqual(['none', 'high', undefined])
     expect(output.slice(0, 2)).toEqual([{ type: 'reasoning-delta', index: 0, text: 'Looking closely' }, { type: 'text-delta', index: 1, text: 'Vision result' }])
+  })
+  it('sends each model to its own endpoint and credential, so a Harness model behind another key can read images', async () => {
+    const first = await endpoint(true)
+    const second = await fixtureServer(true)
+    first.ctx.llm.registerAdapter(['gateway'], new HostRoutes())
+    const bridge = new ModelBridge(first.ctx, { baseURL: first.url, credentialRef: 'TEST_INLINE_KEY', models: ['vision-test', { id: 'text-only', baseURL: second.url, credentialRef: 'TEST_SECOND_KEY' }] })
+    expect((await bridge.models()).find(choice => choice.model === 'text-only')).toEqual({ provider: 'personal-inline', model: 'text-only', inline: true, name: 'Gateway · Text Only', images: true })
+    const message = createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'Read this image' }] })
+    const image = { mediaType: 'image/png', base64: Buffer.from('SYNTHETIC_IMAGE_SENTINEL').toString('base64') }
+    for await (const _ of bridge.stream({ provider: 'personal-inline', model: 'text-only', inline: true }, { messages: [message] }, new Map([[message.id, [image]]]))) { /* drained */ }
+    for await (const _ of bridge.stream({ provider: 'personal-inline', model: 'vision-test', inline: true }, { messages: [message] }, new Map())) { /* drained */ }
+    expect(second.requests.map(request => [request.headers.authorization, request.body.model])).toEqual([['Bearer second-fixture-key', 'text-only']])
+    expect(JSON.stringify(second.requests[0]!.body)).toContain('data:image/png;base64,' + image.base64)
+    expect(first.requests.map(request => [request.headers.authorization, request.body.model])).toEqual([['Bearer fixture-not-a-real-key', 'vision-test']])
+  })
+  it('refuses a model listed twice or an entry endpoint that is not HTTPS', async () => {
+    const { ctx, url } = await endpoint(true)
+    expect(() => new ModelBridge(ctx, { baseURL: url, credentialRef: 'TEST_INLINE_KEY', models: ['vision-test', { id: 'vision-test', credentialRef: 'TEST_SECOND_KEY' }] })).toThrow('listed twice')
+    expect(() => new ModelBridge(ctx, { baseURL: url, credentialRef: 'TEST_INLINE_KEY', models: [{ id: 'other', baseURL: 'http://example.com/v1' }] })).toThrow('HTTPS')
   })
 })

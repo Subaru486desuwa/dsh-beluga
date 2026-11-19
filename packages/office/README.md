@@ -10,7 +10,7 @@ dsh plugin --profile web add ./dsh-beluga-office-0.1.0.tgz
 
 Restart the profile. It adds:
 
-- `read_sheet`, and DOCX, XLSX and PPTX reading through `read_attachment`.
+- `read_sheet`, and DOCX, XLSX and PPTX reading through `read_attachment`; DOC, XLS and PPT files are converted to those formats by LibreOffice first.
 - `create_document`, `edit_document`, `fill_template` for Word.
 - `create_workbook`, `edit_workbook` for Excel, with native charts, recalculation and an error report.
 - `create_presentation` for PowerPoint: slides in eight fixed layouts on a built-in theme, with native charts, speaker notes and a report of text that does not fit.

@@ -7,7 +7,7 @@ describe('bounded in-memory Office reading', () => {
   it('keeps Word paragraph order, styles, table coordinates and headers', () => {
     const result = read({ 'word/document.xml': '<w:document><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>标题 &amp; 内容</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>金额</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>', 'word/header1.xml': '<w:hdr><w:p><w:r><w:t>页眉</w:t></w:r></w:p></w:hdr>' })
     expect(result.status).toBe('text')
-    expect(result.text.split('\n').slice(2)).toEqual(['part word/document.xml', 'p1 [Heading1] "标题 & 内容"', 't1.r1.c1.p1 "金额"', 'part word/header1.xml', 'p1 "页眉"'])
+    expect(result.text.split('\n').slice(2)).toEqual(['default look {left}', 'part word/document.xml', 'p1 [Heading1] "标题 & 内容"', 't1 table: 1 rows, 0 columns; borders none', 't1.r1.c1.p1 "金额"', 'part word/header1.xml', 'p1 "页眉"'])
   })
   it('resolves workbook relationships and preserves strings, formula and cache separately', () => {
     const result = read({ 'xl/workbook.xml': '<workbook><sheets><sheet name="预算" r:id="rId1"/></sheets></workbook>', 'xl/_rels/workbook.xml.rels': '<Relationships><Relationship Id="rId1" Target="worksheets/sheet7.xml"/></Relationships>', 'xl/sharedStrings.xml': '<sst><si><t>00123</t></si></sst>', 'xl/worksheets/sheet7.xml': '<worksheet><sheetData><row><c r="A1" t="s"><v>0</v></c><c r="B1"><f>SUM(B2:B4)</f><v>230000</v></c></row></sheetData></worksheet>' }, 'budget.xlsx')

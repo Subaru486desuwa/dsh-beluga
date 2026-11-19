@@ -9,7 +9,7 @@ const LIMIT = 16 * 1024 * 1024
 const at = (index: number) => `/document[1]/body[1]/paragraph[${index}]`
 const body = (bytes: Uint8Array) => strFromU8(unzipSync(bytes)['word/document.xml']!)
 const replace = (index: number, expected: string, text: string) => ({ location: at(index), expected, action: 'replace' as const, text })
-const edit = (bytes: Uint8Array, changes: Parameters<typeof editDocument>[1], track = false) => editDocument(bytes, changes, track, LIMIT, signal)
+const edit = (bytes: Uint8Array, changes: Parameters<typeof editDocument>[1], track = false) => editDocument(bytes, changes, track, LIMIT, signal).bytes
 const lines = (bytes: Uint8Array) => wordParagraphs(extractOfficeText(bytes, 'a.docx', LIMIT, signal).text)
 const bold = '<w:rPr><w:b/></w:rPr>'
 const italic = '<w:rPr><w:i/></w:rPr>'
@@ -89,9 +89,9 @@ describe('refusing a change', () => {
   it('when the paragraph no longer reads as expected', () => {
     expect(() => edit(wordDocument(p(r('now'))), [replace(1, 'before', 'x')])).toThrow('now reads "now"')
   })
-  it('when the location does not exist or is not a paragraph', () => {
-    expect(() => edit(wordDocument(p(r('a'))), [replace(9, 'a', 'x')])).toThrow('read the file again')
-    expect(() => edit(wordDocument(p(r('a'))), [{ location: '/document[1]/body[1]', expected: '', action: 'delete' }])).toThrow('Not a paragraph')
+  it('when the location holds no paragraph and no paragraph reads as expected', () => {
+    expect(() => edit(wordDocument(p(r('a'))), [replace(9, 'b', 'x')])).toThrow('Nothing at /document[1]/body[1]/paragraph[9]; read the file again')
+    expect(() => edit(wordDocument(p(r('a'))), [{ location: '/document[1]/body[1]', expected: '', action: 'delete' }])).toThrow('Nothing at /document[1]/body[1]; read the file again')
     expect(() => edit(wordDocument(p(r('a'))), [{ ...replace(1, 'a', 'x'), part: 'word/settings.xml' }])).toThrow('Not an editable part')
   })
   it('when one paragraph takes two changes', () => {
@@ -110,6 +110,160 @@ describe('refusing a change', () => {
     const source = wordDocument(p(`<w:ins w:id="1" w:author="x">${r('text')}</w:ins>`))
     expect(() => edit(source, [replace(1, 'text', 'next')], true)).toThrow('unresolved')
     expect(lines(edit(source, [replace(1, 'text', 'next')]))[0]!.text).toBe('next')
+  })
+})
+
+describe('a paragraph that an earlier change moved', () => {
+  const source = () => wordDocument(p(r('一')) + p(r('二')) + p(r('三')))
+  it('is found by its text when its location holds something else', () => {
+    const first = edit(source(), [{ location: 'p1', expected: '一', action: 'insert_after', text: '新' }])
+    const second = edit(first, [{ location: 'p2', expected: '二', action: 'replace', text: '贰' }, { location: 'p9', expected: '三', action: 'replace', text: '叁' }])
+    expect(lines(second).map(line => line.text)).toEqual(['一', '新', '贰', '叁'])
+  })
+  it('is refused when several paragraphs read so, naming where they are', () => {
+    expect(() => edit(wordDocument(p(r('同')) + p(r('同')) + p(r('异'))), [{ location: 'p3', expected: '同', action: 'replace', text: 'x' }])).toThrow('2 paragraphs read so, at p1, p2')
+  })
+  it('is refused when nothing reads so, and an empty paragraph is never found by its text', () => {
+    expect(() => edit(source(), [{ location: 'p2', expected: '无', action: 'replace', text: 'x' }])).toThrow('p2 now reads "二"; read the file again')
+    expect(() => edit(wordDocument(p(r('a')) + p() + p()), [{ location: 'p1', expected: '', action: 'replace', text: 'x' }])).toThrow('read the file again')
+  })
+  it('is named by how it begins when it is long, at its location or after it moved', () => {
+    const long = '一、负责对象存储冷热分层项目，上线后存储成本每月下降约三十八万元。😀结尾'
+    const source = wordDocument(p(r('短')) + p(r(long)))
+    const start = long.slice(0, 20)
+    const { bytes, changed } = editDocument(source, [{ location: 'p2', expected: start, action: 'replace', text: long + '补充' }], false, LIMIT, signal)
+    expect(changed).toEqual([{ part: 'word/document.xml', location: 'p2', text: long + '补充', characters: [...long].length + 2 }])
+    expect(lines(edit(bytes, [{ location: 'p9', expected: start, action: 'delete' }])).map(line => line.text)).toEqual(['短'])
+    expect(() => edit(source, [{ location: 'p2', expected: long.slice(0, 19), action: 'delete' }])).toThrow('p2 now reads')
+    expect(() => edit(source, [{ location: 'p2', expected: start + '错', action: 'delete' }])).toThrow('p2 now reads')
+  })
+  it('counts two changes that reach the same paragraph as one paragraph changed twice', () => {
+    expect(() => edit(source(), [{ location: 'p2', expected: '二', action: 'replace', text: 'x' }, { location: 'p3', expected: '二', action: 'delete' }])).toThrow('Each paragraph takes one change')
+  })
+})
+describe('reporting what it wrote', () => {
+  it('gives each replaced or inserted paragraph where a read of the new file lists it', () => {
+    const source = wordDocument(p(r('一')) + p(r('二')) + '<w:tbl><w:tr><w:tc>' + p(r('格')) + '</w:tc></w:tr></w:tbl>' + p(r('三')))
+    const { bytes, changed } = editDocument(source, [
+      { location: 'p1', expected: '一', action: 'delete' },
+      { location: 'p2', expected: '二', action: 'insert_after', text: '新' },
+      { location: 't1.r1.c1.p1', expected: '格', action: 'replace', text: '填' },
+      { location: 'p3', expected: '三', action: 'replace', text: '叁' },
+    ], false, LIMIT, signal)
+    expect(changed).toEqual([
+      { part: 'word/document.xml', location: 'p2', text: '新', characters: 1 },
+      { part: 'word/document.xml', location: 't1.r1.c1.p1', text: '填', characters: 1 },
+      { part: 'word/document.xml', location: 'p3', text: '叁', characters: 1 },
+    ])
+    const read = lines(bytes)
+    for (const item of changed) expect(read.find(line => line.location === item.location)?.text).toBe(item.text)
+  })
+})
+describe('giving a paragraph a look', () => {
+  const looks = (bytes: Uint8Array) => extractOfficeText(bytes, 'a.docx', LIMIT, signal).text.split('\n').slice(4)
+  it('sets it on every run, the paragraph mark and the alignment, so a read shows it', () => {
+    const source = wordDocument(p(r('标题', bold), r('副题', italic)) + p(r('正文')))
+    const { bytes, changed } = editDocument(source, [{ location: 'p1', expected: '标题副题', action: 'format', format: { font: '黑体', size: 16, bold: true, italic: false, color: '#c00000', align: 'center' } }], false, LIMIT, signal)
+    expect(looks(bytes)).toEqual(['p1 {黑体 16pt bold #C00000 center} "标题副题"', 'p2 "正文"'])
+    expect(changed).toEqual([{ part: 'word/document.xml', location: 'p1', text: '标题副题', characters: 4 }])
+    expect(body(bytes)).toContain('<w:pPr><w:jc w:val="center"/><w:rPr><w:rFonts w:ascii="黑体" w:hAnsi="黑体" w:eastAsia="黑体" w:cs="黑体"/><w:b/><w:i w:val="0"/><w:color w:val="C00000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:pPr>')
+  })
+  it('comes with new text in the same change, and leaves properties it does not name', () => {
+    const source = wordDocument(p(r('旧', '<w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hint="eastAsia"/><w:u w:val="single"/><w:sz w:val="21"/></w:rPr>')) + p())
+    const bytes = edit(source, [{ ...replace(1, '旧', '新文字'), format: { font: '楷体', highlight: 'yellow' } }, { location: 'p2', expected: '', action: 'replace', text: '填写', format: { size: 12, underline: true } }])
+    expect(looks(bytes)).toEqual(['p1 {楷体 10.5pt underline highlight yellow} "新文字"', 'p2 {12pt underline} "填写"'])
+    expect(body(bytes)).not.toContain('asciiTheme')
+    expect(body(bytes)).toContain('w:hint="eastAsia"')
+  })
+  it('keeps a font name with XML characters as text', () => {
+    const bytes = edit(wordDocument(p(r('a'))), [{ location: 'p1', expected: 'a', action: 'format', format: { font: 'A&B "C"' } }])
+    expect(body(bytes)).toContain('w:ascii="A&amp;B &quot;C&quot;"')
+  })
+  it('is refused as a tracked change', () => {
+    expect(() => edit(wordDocument(p(r('a'))), [{ location: 'p1', expected: 'a', action: 'format', format: { bold: true } }], true)).toThrow('cannot be written as tracked changes')
+  })
+})
+describe('adding and removing table rows', () => {
+  const tc = (inner: string, properties = '') => `<w:tc>${properties ? `<w:tcPr>${properties}</w:tcPr>` : ''}${inner}</w:tc>`
+  const tr = (...cells: string[]) => `<w:tr>${cells.join('')}</w:tr>`
+  const tbl = (...rows: string[]) => `<w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="2000"/></w:tblGrid>${rows.join('')}</w:tbl>`
+  const shade = '<w:shd w:val="clear" w:fill="D9E2F3"/>'
+  const read = (bytes: Uint8Array) => extractOfficeText(bytes, 'a.docx', LIMIT, signal).text.split('\n').slice(4)
+  it('adds a row built like the one it follows, with each cell looking like the cell above', () => {
+    const source = wordDocument(tbl(tr(tc(p(r('奖项', bold)), shade), tc(p(r('时间', italic)) + p(r('第二段')))), tr(tc(p(r('甲')), shade), tc(p(r('2025'))))) + p(r('后')))
+    const { bytes, changed } = editDocument(source, [{ location: 't1.r1.c1.p1', expected: '奖项', action: 'insert_row_after', cells: ['乙', '2026'] }], false, LIMIT, signal)
+    expect(read(bytes)).toEqual([
+      't1 table: 3 rows, 2 columns; column widths 1.8 3.5 cm; borders none; shaded #D9E2F3: r1.c1 r2.c1 r3.c1',
+      't1.r1.c1.p1 {bold} "奖项"', 't1.r1.c2.p1 {italic} "时间"', 't1.r1.c2.p2 "第二段"',
+      't1.r2.c1.p1 {bold} "乙"', 't1.r2.c2.p1 {italic} "2026"',
+      't1.r3.c1.p1 "甲"', 't1.r3.c2.p1 "2025"', 'p1 "后"',
+    ])
+    expect(changed).toEqual([{ part: 'word/document.xml', location: 't1.r2.c1.p1', text: '乙', characters: 1 }, { part: 'word/document.xml', location: 't1.r2.c2.p1', text: '2026', characters: 4 }])
+  })
+  it('leaves cells without a text empty, gives every new cell a format, and refuses more texts than cells', () => {
+    const source = wordDocument(tbl(tr(tc(p(r('甲'))), tc(p(r('乙'))))))
+    const bytes = edit(source, [{ location: 't1.r1.c2.p1', expected: '乙', action: 'insert_row_after', cells: ['丙'], format: { color: '0000FF' } }])
+    expect(read(bytes).slice(3)).toEqual(['t1.r2.c1.p1 {#0000FF} "丙"', 't1.r2.c2.p1 {#0000FF} ""'])
+    expect(() => edit(source, [{ location: 't1.r1.c1.p1', expected: '甲', action: 'insert_row_after', cells: ['1', '2', '3'] }])).toThrow('This row has 2 cells, and 3 texts were given')
+  })
+  it('carries a cell merged down through a new row, and moves its start when its first row goes', () => {
+    const merged = tbl(tr(tc(p(r('经历')), '<w:vMerge w:val="restart"/>'), tc(p(r('一')))), tr(tc(p(), '<w:vMerge/>'), tc(p(r('二')))), tr(tc(p(r('备注'))), tc(p(r('三')))))
+    const grown = edit(wordDocument(merged), [{ location: 't1.r1.c2.p1', expected: '一', action: 'insert_row_after', cells: ['忽略', '新'] }])
+    expect(read(grown)[0]).toContain('merged: r1.c1 down 3 rows (r2.c1, r3.c1 continue it and stay empty)')
+    expect(read(grown)).toContain('t1.r2.c2.p1 "新"')
+    expect(read(grown)).toContain('t1.r2.c1.p1 ""')
+    const shrunk = edit(wordDocument(merged), [{ location: 't1.r1.c2.p1', expected: '一', action: 'delete_row' }])
+    expect(read(shrunk)[0]).toBe('t1 table: 2 rows, 2 columns; column widths 1.8 3.5 cm; borders none')
+    expect(body(shrunk)).toContain('<w:vMerge w:val="restart"/>')
+    expect(read(shrunk).slice(1)).toEqual(['t1.r1.c1.p1 ""', 't1.r1.c2.p1 "二"', 't1.r2.c1.p1 "备注"', 't1.r2.c2.p1 "三"'])
+  })
+  it('refuses a paragraph outside a table, the only row of a table, a row with an image, and tracking', () => {
+    const one = wordDocument(p(r('外')) + tbl(tr(tc(p(r('甲'))), tc(p(r('乙'))))))
+    expect(() => edit(one, [{ location: 'p1', expected: '外', action: 'insert_row_after' }])).toThrow('needs the location of a paragraph inside the table row')
+    expect(() => edit(one, [{ location: 't1.r1.c1.p1', expected: '甲', action: 'delete_row' }])).toThrow('only row of its table')
+    const image = wordDocument(tbl(tr(tc(p('<w:r><w:drawing/></w:r>' + r('图'))), tc(p())), tr(tc(p(r('甲'))), tc(p()))))
+    expect(() => edit(image, [{ location: 't1.r1.c1.p1', expected: '图', action: 'delete_row' }])).toThrow('image, field or other object')
+    expect(() => edit(one, [{ location: 't1.r1.c1.p1', expected: '甲', action: 'insert_row_after' }], true)).toThrow('cannot be written as tracked changes')
+  })
+  it('works on the innermost row when tables nest', () => {
+    const inner = tbl(tr(tc(p(r('内一'))), tc(p(r('内二')))))
+    const bytes = edit(wordDocument(tbl(tr(tc(inner + p()), tc(p(r('外')))))), [{ location: 't1.r1.c1.t1.r1.c1.p1', expected: '内一', action: 'insert_row_after', cells: ['a', 'b'] }])
+    expect(read(bytes)).toContain('t1.r1.c1.t1.r2.c2.p1 "b"')
+    expect(read(bytes)[0]).toContain('t1 table: 1 rows')
+  })
+})
+describe('writing a table cell whole', () => {
+  const cell = (...paragraphs: string[]) => `<w:tc>${paragraphs.join('')}</w:tc>`
+  const form = () => wordDocument(p(r('申报表')) + `<w:tbl><w:tr>${cell(p(r('主要事迹', bold)))}${cell('<w:p><w:pPr><w:jc w:val="both"/></w:pPr></w:p>')}</w:tr><w:tr>${cell(p(r('理由')))}${cell(p(r('旧一', italic)), p(r('旧二')), p(r('旧三')))}</w:tr></w:tbl>`)
+  const run = (changes: Parameters<typeof editDocument>[1], track = false) => editDocument(form(), changes, track, LIMIT, signal)
+  it('gives each line a paragraph that looks like the one before, and reports the cell with its length', () => {
+    const { bytes, changed } = run([{ location: 't1.r1.c2', action: 'set_cell', text: '一、项目\n二、成果\n三、贡献' }])
+    expect(lines(bytes).filter(line => line.location.startsWith('t1.r1.c2')).map(line => [line.location, line.text])).toEqual([['t1.r1.c2.p1', '一、项目'], ['t1.r1.c2.p2', '二、成果'], ['t1.r1.c2.p3', '三、贡献']])
+    expect(body(bytes).match(/<w:jc w:val="both"\/>/gu)).toHaveLength(3)
+    expect(changed).toEqual([{ part: 'word/document.xml', location: 't1.r1.c2', text: '一、项目\n二、成果\n三、贡献', characters: 12, paragraphs: 3 }])
+  })
+  it('takes the cell that holds a named paragraph, keeps the look of the text it replaces, and removes paragraphs left over', () => {
+    const { bytes, changed } = run([{ location: 't1.r2.c2.p3', action: 'set_cell', text: '新一' }])
+    expect(lines(bytes).filter(line => line.location.startsWith('t1.r2.c2')).map(line => line.text)).toEqual(['新一'])
+    expect(body(bytes)).toContain('<w:rPr><w:i/></w:rPr><w:t xml:space="preserve">新</w:t>')
+    expect(changed).toEqual([{ part: 'word/document.xml', location: 't1.r2.c2', text: '新一', characters: 2, paragraphs: 1 }])
+  })
+  it('checks expected when it is given, against the whole cell', () => {
+    expect(lines(run([{ location: 't1.r2.c2', expected: '旧一\n旧二\n旧三', action: 'set_cell', text: '' }]).bytes).find(line => line.location === 't1.r2.c2.p1')?.text).toBe('')
+    expect(() => run([{ location: 't1.r2.c2', expected: '别的', action: 'set_cell', text: 'x' }])).toThrow('t1.r2.c2 now reads "旧一\\n旧二\\n旧三"; leave expected out')
+  })
+  it('refuses a location that is no cell, and a cell changed twice in one call', () => {
+    expect(() => run([{ location: 'p1', action: 'set_cell', text: 'x' }])).toThrow('p1 is not a table cell')
+    expect(() => run([{ location: 't1.r9.c1', action: 'set_cell', text: 'x' }])).toThrow('is not a table cell')
+    expect(() => run([{ location: 't1.r2.c2', action: 'set_cell', text: 'x' }, { location: 't1.r2.c2.p2', expected: '旧二', action: 'replace', text: 'y' }])).toThrow('Each paragraph takes one change')
+  })
+  it('writes tracked changes, and sets a look on the whole cell', () => {
+    const tracked = body(run([{ location: 't1.r2.c2', action: 'set_cell', text: '旧一\n新二' }], true).bytes)
+    expect(tracked).toContain('<w:del ')
+    expect(tracked).toContain('<w:ins ')
+    const looked = run([{ location: 't1.r1.c2', action: 'set_cell', text: '甲\n乙', format: { bold: true } }]).bytes
+    expect(lines(looked).filter(line => line.location.startsWith('t1.r1.c2')).map(line => line.text)).toEqual(['甲', '乙'])
+    expect(body(looked).match(/<w:b\/>/gu)!.length).toBeGreaterThanOrEqual(3)
   })
 })
 

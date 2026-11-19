@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConversionError, createConverter, type Converter, type RenderImagesRequest, type RenderImagesResult } from '@deepseek-ai/libreoffice-kit'
-import { PersonalChatError, officeFormat } from 'dsh-beluga'
+import { PersonalChatError, legacyOfficeFormat, legacyOfficeFormats, officeFormat } from 'dsh-beluga'
 import type { DocumentCheck, OfficePreview } from 'dsh-beluga'
 import { OfficePackage } from './package.ts'
 import { cellRef, findSheet, openBook, outlineSheet } from './workbook.ts'
@@ -82,6 +82,16 @@ export class OfficeRenderer {
     return this.inFiles(bytes, format, async (engine, inputPath, directory) => {
       const outputPath = join(directory, 'output.pdf')
       await engine.render({ inputPath, outputPath }, signal)
+      return readFile(outputPath)
+    })
+  }
+  /** @returns an Office 97–2003 file as LibreOffice saves it in the current format it maps to. */
+  async convertLegacy(bytes: Uint8Array, name: string, signal: AbortSignal): Promise<Uint8Array> {
+    const from = legacyOfficeFormat(name)
+    if (!from) throw new PersonalChatError('attachment-format', 'Only DOC, XLS and PPT files are converted')
+    return this.inFiles(bytes, from, async (engine, inputPath, directory) => {
+      const outputPath = join(directory, 'output.' + legacyOfficeFormats[from])
+      await engine.convert({ inputPath, outputPath }, signal)
       return readFile(outputPath)
     })
   }

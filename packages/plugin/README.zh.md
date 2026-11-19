@@ -76,10 +76,13 @@ Chat 和 Work 默认互不读取，**设置 → 应用 → Work** 里的两个�
     inlineProvider:
       baseURL: https://YOUR-PROVIDER.example/v1
       credentialRef: YOUR_EXISTING_CREDENTIAL_REFERENCE
-      models: [YOUR_IMAGE_MODEL]
+      models:
+        - YOUR_IMAGE_MODEL
+        - id: MODEL_BEHIND_ANOTHER_KEY
+          credentialRef: ITS_CREDENTIAL_REFERENCE
 ```
 
-选择带 **Inline images** 标记的模型。它使用提供商 API，不等同于 ChatGPT 网页订阅。rc.3 原生图片流程会落盘，因此这里采用独立内联路径。协议与载荷由本地 HTTP fixture 验证；具体真实提供商／模型组合仍需单独验收。
+模型条目可单独写自己的 `baseURL` 或 `credentialRef`，其余条目沿用路由的值。内联路由服务的模型（例如 DeepSeek-V4.1-Flash）只以其 Harness 名称列出一次，此后它的所有聊天都走内联路由。选择带 **Inline images** 标记的模型。它使用提供商 API，不等同于 ChatGPT 网页订阅。rc.3 原生图片流程会落盘，因此这里采用独立内联路径。协议与载荷由本地 HTTP fixture 验证；具体真实提供商／模型组合仍需单独验收。
 
 ## 数据与卸载
 

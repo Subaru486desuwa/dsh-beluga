@@ -3,7 +3,7 @@
  * answer it. Tool calls and results stay in the history the model sees, but a person sees
  * only the reply, its files, its to-do list, how long it thought, and what it drew on or proposed to memory.
  */
-import type { BranchId, CandidateId, ChatBranch, ChatMessageView, ChatReference, Conversation, MemoryId, TodoItem, WebSource, WorkReference } from '../shared/types.ts'
+import type { BranchId, CandidateId, ChatAttachment, ChatBranch, ChatMessageView, ChatReference, Conversation, MemoryId, TodoItem, WebSource, WorkReference } from '../shared/types.ts'
 
 export interface ChatTurn {
   readonly key: string
@@ -34,6 +34,16 @@ function unique<V, K>(values: readonly V[], key: (value: V) => K): V[] {
   const kept = new Map<K, V>()
   for (const value of values) if (!kept.has(key(value))) kept.set(key(value), value)
   return [...kept.values()]
+}
+
+/**
+ * A reply shows each Artifact once. Chats written before a reply kept one Version hold every step of it.
+ * @returns of each Artifact among these files, its last Version, where the Artifact first appears.
+ */
+export function lastVersions(files: readonly ChatAttachment[]): ChatAttachment[] {
+  const last = new Map<string, ChatAttachment>()
+  for (const file of files) last.set(file.artifact?.rootId ?? file.id, file)
+  return [...last.values()]
 }
 
 /** @param messages - one branch in order. @returns its turns, a reply with no message before it standing alone. */
